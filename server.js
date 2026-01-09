@@ -25,7 +25,7 @@ app.post('/login', async (req, res) => {
 
   try {
     const result = await pool.query(
-      'SELECT id, nombre, usuario FROM dirigente WHERE usuario = $1 AND contrasena = $2',
+      'SELECT id_dirigente, nombre, usuario FROM dirigente WHERE usuario = $1 AND contrasena = $2',
       [usuario, contrasena]
     );
 
