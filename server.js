@@ -19,16 +19,16 @@ app.listen(PORT, () => {
 });
 
 app.post('/login', async (req, res) => {
-  const { usuario, password } = req.body;
+  const { usuario, contrasena } = req.body;
 
-  if (!usuario || !password) {
+  if (!usuario || !contrasena) {
     return res.status(400).json({ message: 'Faltan datos' });
   }
 
   try {
     const result = await pool.query(
-      'SELECT * FROM dirigentes WHERE usuario = $1 AND password = $2',
-      [usuario, password]
+      'SELECT * FROM dirigentes WHERE usuario = $1 AND contraseña = $2',
+      [usuario, contrasena]
     );
 
     if (result.rows.length === 0) {
