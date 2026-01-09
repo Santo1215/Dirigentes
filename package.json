@@ -4,7 +4,7 @@
   "description": "Backend Dirigentes",
   "main": "server.js",
   "scripts": {
-    "start": "node backend/server.js"
+    "start": "node server.js"
   },
   "author": "Jesuss",
   "license": "MIT",
