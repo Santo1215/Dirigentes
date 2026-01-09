@@ -10,6 +10,15 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
+process.on('uncaughtException', err => {
+  console.error('❌ UNCAUGHT EXCEPTION:', err);
+});
+
+process.on('unhandledRejection', err => {
+  console.error('❌ UNHANDLED REJECTION:', err);
+});
+
+
 app.get('/', (req, res) => {
   res.send('🚀 Backend Dirigentes funcionando');
 });
@@ -27,12 +36,12 @@ app.post('/login', async (req, res) => {
 
   try {
     const result = await pool.query(
-      'SELECT * FROM dirigentes WHERE usuario = $1 AND contraseña = $2',
+      'SELECT * FROM dirigentes WHERE usuario = $1 AND contrasena = $2',
       [usuario, contrasena]
     );
 
     if (result.rows.length === 0) {
-      return res.status(401).json({ message: 'Usuario o contraseña incorrectos' });
+      return res.status(401).json({ message: 'Usuario o contrasena incorrectos' });
     }
 
     const user = result.rows[0];
