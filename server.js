@@ -4,13 +4,12 @@ const cors = require('cors');
 const pool = require('./db');
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-/* ✅ Health check */
+/* ✅ Health */
 app.get('/', (req, res) => {
   res.send('🚀 Backend Dirigentes con DB funcionando');
 });
@@ -25,7 +24,23 @@ app.post('/login', async (req, res) => {
 
   try {
     const result = await pool.query(
-      'SELECT id_dirigente, nombre, usuario FROM dirigente WHERE usuario = $1 AND contrasena = $2',
+      `
+      SELECT
+        d.id_dirigente,
+        d.usuario,
+        d.nombre,
+        d.apellido,
+        d.rol,
+        d.comite,
+        t.id_tribu,
+        t.nombre AS tribu,
+        t.color_hex,
+        t.puntos
+      FROM dirigente d
+      LEFT JOIN tribu t ON d.id_tribu = t.id_tribu
+      WHERE d.usuario = $1
+        AND d.contrasena = $2
+      `,
       [usuario, contrasena]
     );
 
@@ -44,7 +59,7 @@ app.post('/login', async (req, res) => {
   }
 });
 
-/* ✅ Escucha correcta para Railway */
+/* ✅ Railway */
 app.listen(PORT, '0.0.0.0', () => {
   console.log('🔥 Servidor escuchando en puerto', PORT);
 });
