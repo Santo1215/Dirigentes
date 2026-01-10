@@ -154,6 +154,34 @@ app.post('/dirigente', async (req, res) => {
   }
 });
 
+/* ✅ Obtener QR personal del dirigente */
+app.get('/dirigente/:id/qr', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT codigo_qr
+      FROM qr_personal
+      WHERE id_dirigente = $1
+      `,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'QR no encontrado' });
+    }
+
+    res.json({
+      codigo_qr: result.rows[0].codigo_qr
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo QR:', error);
+    res.status(500).json({ message: 'Error del servidor' });
+  }
+});
+
 
 /* ✅ Railway */
 app.listen(PORT, '0.0.0.0', () => {
