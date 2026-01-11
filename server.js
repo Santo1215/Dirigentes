@@ -216,11 +216,11 @@ app.put('/dirigente/:id', async (req, res) => {
     const result = await pool.query(
       `
       UPDATE dirigente
-      SET rol = $1, comite = $2
-      WHERE id_dirigente = $3
+      SET rol = $1, comite = $2, id_tribu = $3
+      WHERE id_dirigente = $4
       RETURNING id_dirigente, nombre, apellido, rol, comite
       `,
-      [rol, comite || null, id]
+      [rol, comite || null, id_tribu || null, id]
     );
 
     if (result.rows.length === 0) {
@@ -261,6 +261,21 @@ app.delete('/dirigente/:id', async (req, res) => {
   }
 });
 
+/* Obtener tribus */
+app.get('/tribus', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id_tribu, nombre
+      FROM tribu
+      ORDER BY nombre
+    `);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('❌ Error obteniendo tribus:', error);
+    res.status(500).json({ message: 'Error del servidor' });
+  }
+});
 
 /* ✅ Railway */
 app.listen(PORT, '0.0.0.0', () => {
