@@ -182,6 +182,85 @@ app.get('/dirigente/:id/qr', async (req, res) => {
   }
 });
 
+/* ✅ Obtener todos los dirigentes */
+app.get('/dirigentes', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        id_dirigente,
+        nombre,
+        apellido,
+        rol,
+        comite
+      FROM dirigente
+      ORDER BY nombre ASC
+    `);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('❌ Error obteniendo dirigentes:', error);
+    res.status(500).json({ message: 'Error del servidor' });
+  }
+});
+
+/* ✅ Actualizar rol y comité de un dirigente */
+app.put('/dirigente/:id', async (req, res) => {
+  const { id } = req.params;
+  const { rol, comite } = req.body;
+
+  if (!rol) {
+    return res.status(400).json({ message: 'El rol es obligatorio' });
+  }
+
+  try {
+    const result = await pool.query(
+      `
+      UPDATE dirigente
+      SET rol = $1, comite = $2
+      WHERE id_dirigente = $3
+      RETURNING id_dirigente, nombre, apellido, rol, comite
+      `,
+      [rol, comite || null, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Dirigente no encontrado' });
+    }
+
+    res.json({
+      message: 'Dirigente actualizado',
+      dirigente: result.rows[0],
+    });
+  } catch (error) {
+    console.error('❌ Error actualizando dirigente:', error);
+    res.status(500).json({ message: 'Error del servidor' });
+  }
+});
+
+/* Eliminar dirigente */
+app.delete('/dirigente/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      'DELETE FROM dirigente WHERE id_dirigente = $1 RETURNING nombre, apellido',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Dirigente no encontrado' });
+    }
+
+    res.json({
+      message: 'Dirigente eliminado',
+      dirigente: result.rows[0],
+    });
+  } catch (error) {
+    console.error('❌ Error eliminando dirigente:', error);
+    res.status(500).json({ message: 'Error del servidor' });
+  }
+});
+
 
 /* ✅ Railway */
 app.listen(PORT, '0.0.0.0', () => {
