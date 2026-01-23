@@ -3,10 +3,26 @@ const express = require('express');
 const cors = require('cors');
 const pool = require('./db');
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const auth = require('./auth');
 
-function generarCodigoQR(dirigente) {
-  const random = crypto.randomBytes(4).toString('hex').toUpperCase();
-  return `DIR-${dirigente.id_dirigente}-${dirigente.usuario}-${random}`;
+function generarContrasena(longitud = 9) {
+  const mayus = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const minus = 'abcdefghijklmnopqrstuvwxyz';
+  const numeros = '0123456789';
+  const todos = mayus + minus + numeros;
+
+  let contrasena =
+    mayus[Math.floor(Math.random() * mayus.length)] +
+    minus[Math.floor(Math.random() * minus.length)] +
+    numeros[Math.floor(Math.random() * numeros.length)];
+
+  for (let i = contrasena.length; i < longitud; i++) {
+    contrasena += todos[Math.floor(Math.random() * todos.length)];
+  }
+
+  return contrasena.split('').sort(() => 0.5 - Math.random()).join('');
 }
 
 const app = express();
@@ -15,53 +31,51 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-/* ✅ Health */
+/* Health */
 app.get('/', (req, res) => {
   res.send('🚀 Backend Dirigentes con DB funcionando');
 });
 
-/* ✅ Login */
+/* Login */
 app.post('/login', async (req, res) => {
   const { usuario, contrasena } = req.body;
-
-  if (!usuario || !contrasena) {
-    return res.status(400).json({ message: 'Faltan datos' });
-  }
-
   try {
     const result = await pool.query(
-      `
-      SELECT
-        d.id_dirigente,
-        d.usuario,
-        d.nombre,
-        d.apellido,
-        d.rol,
-        d.comite,
-        t.id_tribu,
-        t.nombre AS tribu,
-        t.color_hex,
-        t.puntos
-      FROM dirigente d
-      LEFT JOIN tribu t ON d.id_tribu = t.id_tribu
-      WHERE d.usuario = $1
-        AND d.contrasena = $2
-      `,
-      [usuario, contrasena]
+      'SELECT * FROM dirigente WHERE usuario = $1',
+      [usuario]
     );
 
     if (result.rows.length === 0) {
-      return res.status(401).json({ message: 'Usuario o contraseña incorrectos' });
+      return res.status(401).json({ error: 'Credenciales inválidas' });
     }
 
-    res.json({
-      message: 'Login correcto',
-      user: result.rows[0],
-    });
+    const dirigente = result.rows[0];
 
-  } catch (error) {
-    console.error('❌ Error en login:', error);
-    res.status(500).json({ message: 'Error del servidor' });
+    const valido = await bcrypt.compare(contrasena, dirigente.contrasena);
+    if (!valido) {
+      return res.status(401).json({ error: 'Credenciales inválidas' });
+    }
+
+    const token = jwt.sign(
+      {
+        id_dirigente: dirigente.id_dirigente,
+        rol: dirigente.rol,
+        id_tribu: dirigente.id_tribu
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '8h' }
+    );
+
+    res.json({
+      token,
+      dirigente: {
+        id_dirigente: dirigente.id_dirigente,
+        nombre: dirigente.nombre,
+        rol: dirigente.rol
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Error en login' });
   }
 });
 
@@ -72,20 +86,23 @@ app.post('/dirigente', async (req, res) => {
     rol,
     comite,
     id_tribu,
-    contrasena
   } = req.body;
 
   // 🔒 Validación mínima
-  if (!nombre || !apellido || !rol || !contrasena) {
+  if (!nombre || !apellido || !rol) {
     return res.status(400).json({ message: 'Faltan datos obligatorios' });
   }
 
   const client = await pool.connect();
 
   try {
+    
+
     await client.query('BEGIN');
 
     /* 1️⃣ Crear dirigente SIN usuario */
+    const contrasenaPlano = generarContrasena();
+    const contrasenaHash = await bcrypt.hash(contrasenaPlano, 9);
     const dirigenteResult = await client.query(
       `
       INSERT INTO dirigente
@@ -93,15 +110,15 @@ app.post('/dirigente', async (req, res) => {
       VALUES ($1,$2,$3,$4,$5,$6)
       RETURNING *
       `,
-      [nombre, apellido, rol, comite, id_tribu, contrasena]
+      [nombre, apellido, rol, comite, id_tribu, contrasenaHash]
     );
 
     const dirigente = dirigenteResult.rows[0];
 
     /* 2️⃣ Generar usuario automático: NombreApellidoID */
     const usuarioGenerado =
-      nombre.replace(/\s+/g, '') +
-      apellido.replace(/\s+/g, '') +
+      nombre.replace(/\s+/g, '').toLowerCase() +
+      apellido.replace(/\s+/g, '').toLowerCase() +
       dirigente.id_dirigente;
 
     /* 3️⃣ Actualizar dirigente con el usuario */
@@ -115,7 +132,7 @@ app.post('/dirigente', async (req, res) => {
     );
 
     /* 4️⃣ Generar QR personal */
-    const codigoQR = `DIR-${usuarioGenerado}-${Date.now()}`;
+    const codigoQR = `DIR-${dirigente.nombre}-${dirigente.apellido}-${dirigente.id_dirigente}`;
     const tokenSecreto = crypto.randomBytes(16).toString('hex');
 
     /* 5️⃣ Guardar QR */
@@ -138,6 +155,7 @@ app.post('/dirigente', async (req, res) => {
         nombre: dirigente.nombre,
         apellido: dirigente.apellido,
         usuario: usuarioGenerado,
+        contrasena: contrasenaPlano,
         rol: dirigente.rol,
         comite: dirigente.comite,
         id_tribu: dirigente.id_tribu,
@@ -206,7 +224,7 @@ app.get('/dirigentes', async (req, res) => {
 /* ✅ Actualizar rol y comité de un dirigente */
 app.put('/dirigente/:id', async (req, res) => {
   const { id } = req.params;
-  const { rol, comite } = req.body;
+  const { rol, comite, id_tribu} = req.body;
 
   if (!rol) {
     return res.status(400).json({ message: 'El rol es obligatorio' });
@@ -261,23 +279,478 @@ app.delete('/dirigente/:id', async (req, res) => {
   }
 });
 
-/* Obtener tribus */
+// GET /tribus
 app.get('/tribus', async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT id_tribu, nombre
-      FROM tribu
-      ORDER BY nombre
-    `);
-
+    const result = await pool.query(
+      'SELECT id_tribu, nombre, puntos, color_hex FROM tribu ORDER BY id_tribu'
+    );
     res.json(result.rows);
   } catch (error) {
     console.error('❌ Error obteniendo tribus:', error);
     res.status(500).json({ message: 'Error del servidor' });
   }
 });
+// GET /asistencia/exoditos
+app.get('/asistencia/exoditos', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        t.nombre AS tribu,
+        e.id_exodito,
+        e.nombre AS exodito,
+        ARRAY_AGG(a.fecha ORDER BY a.fecha) AS fechas
+      FROM asistencia_exodito a
+      JOIN exodito e ON e.id_exodito = a.id_exodito
+      JOIN tribu t ON t.id_tribu = e.id_tribu
+      WHERE a.estado = 'Presente'
+      GROUP BY t.nombre, e.id_exodito, e.nombre
+      ORDER BY t.nombre, e.nombre
+    `);
 
-/* ✅ Railway */
+    res.json(result.rows);
+  } catch (error) {
+    console.error('❌ Error asistencia exoditos:', error);
+    res.status(500).json({ message: 'Error del servidor' });
+  }
+});
+
+app.post('/asistencia/qr', auth, async (req, res) => {
+  const { codigo_qr } = req.body;
+
+  if (!codigo_qr) {
+    return res.status(400).json({ error: 'Código QR requerido' });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // 1️⃣ Buscar QR
+    const qrResult = await client.query(
+      `SELECT * FROM qr_personal
+       WHERE codigo_qr = $1`,
+      [codigo_qr]
+    );
+
+    if (qrResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'QR no válido' });
+    }
+
+    const qr = qrResult.rows[0];
+
+    // 2️⃣ Verificar expiración
+    const hoy = new Date();
+    if (new Date(qr.fecha_expiracion) < hoy) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'QR expirado' });
+    }
+
+    // 3️⃣ Verificar asistencia duplicada (mismo día)
+    const existe = await client.query(
+      `SELECT 1 FROM asistencia
+       WHERE id_dirigente = $1 AND fecha = CURRENT_DATE`,
+      [qr.id_dirigente]
+    );
+
+    if (existe.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Asistencia ya registrada hoy' });
+    }
+
+    // 4️⃣ Registrar asistencia
+    const asistencia = await client.query(
+      `INSERT INTO asistencia
+       (id_dirigente, hora_llegada, estado, metodo_registro)
+       VALUES ($1, CURRENT_TIME, 'Presente', 'QR')
+       RETURNING *`,
+      [qr.id_dirigente]
+    );
+
+    // 5️⃣ Actualizar QR
+    await client.query(
+      `UPDATE qr_personal
+       SET veces_usado = veces_usado + 1,
+           ultimo_uso = CURRENT_TIMESTAMP
+       WHERE id_qr = $1`,
+      [qr.id_qr]
+    );
+
+    await client.query('COMMIT');
+
+    res.json({
+      mensaje: 'Asistencia registrada correctamente',
+      asistencia: asistencia.rows[0]
+    });
+
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: 'Error al registrar asistencia' });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/asistencia/manual', auth, async (req, res) => {
+  const { id_dirigente, estado } = req.body;
+
+  if (!id_dirigente || !estado) {
+    return res.status(400).json({ error: 'Datos incompletos' });
+  }
+
+  try {
+    const existe = await pool.query(
+      `SELECT 1 FROM asistencia
+       WHERE id_dirigente = $1 AND fecha = CURRENT_DATE`,
+      [id_dirigente]
+    );
+
+    if (existe.rows.length > 0) {
+      return res.status(400).json({ error: 'Asistencia ya registrada hoy' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO asistencia
+       (id_dirigente, hora_llegada, estado, metodo_registro)
+       VALUES ($1, CURRENT_TIME, $2, 'Manual')
+       RETURNING *`,
+      [id_dirigente, estado]
+    );
+
+    res.json({
+      mensaje: 'Asistencia registrada manualmente',
+      asistencia: result.rows[0]
+    });
+
+  } catch (err) {
+    res.status(500).json({ error: 'Error al registrar asistencia manual' });
+  }
+});
+
+app.get('/asistencia/fecha/:fecha', auth, async (req, res) => {
+  const { fecha } = req.params;
+
+  if (!fecha) {
+    return res.status(400).json({ error: 'Fecha requerida' });
+  }
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT 
+        d.id_dirigente,
+        d.nombre,
+        d.apellido,
+        d.rol,
+        d.comite,
+        a.id_asistencia,
+        a.fecha,
+        a.hora_llegada,
+        a.estado,
+        a.metodo_registro
+      FROM dirigente d
+      LEFT JOIN asistencia a
+        ON d.id_dirigente = a.id_dirigente
+        AND a.fecha = $1
+      ORDER BY d.nombre
+      `,
+      [fecha]
+    );
+
+    res.json(result.rows);
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al obtener asistencia' });
+  }
+});
+
+// Multas
+app.get('/multas', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT 
+        m.id_multa,
+        m.fecha,
+        m.monto,
+        m.motivo,
+        d.nombre,
+        d.apellido
+      FROM multa m
+      JOIN dirigente d ON m.id_dirigente = d.id_dirigente
+      ORDER BY m.fecha DESC
+      `
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Error al obtener multas' });
+  }
+});
+
+// Obtener multas de un dirigente específico
+app.get('/multas/dirigente/:id', auth, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT *
+      FROM multa
+      WHERE id_dirigente = $1
+      ORDER BY fecha DESC
+      `,
+      [id]
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Error al obtener multas del dirigente' });
+  }
+});
+
+
+
+app.post('/multas', auth, async (req, res) => {
+  const { id_dirigente, id_asistencia, monto, motivo } = req.body;
+
+  if (!id_dirigente || !monto || !motivo) {
+    return res.status(400).json({ error: 'Datos incompletos' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO multa
+       (id_dirigente, id_asistencia, monto, motivo)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [id_dirigente, id_asistencia || null, monto, motivo]
+    );
+
+    res.json({
+      mensaje: 'Multa registrada correctamente',
+      multa: result.rows[0]
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al registrar multa' });
+  }
+});
+
+// Delete multa
+app.delete('/multa/:id', auth, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      `DELETE FROM multa
+        WHERE id_multa = $1
+        RETURNING *`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Multa no encontrada' });
+    }
+    res.json({
+      mensaje: 'Multa eliminada correctamente',
+      multa: result.rows[0]
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar multa' });
+  }
+});
+
+//Exoditos
+app.get('/exoditos', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT 
+        e.id_exodito,
+        e.nombre,
+        e.apellido,
+        e.cargo,
+        e.id_tribu,
+        t.nombre AS tribu
+      FROM exodito e
+      JOIN tribu t ON e.id_tribu = t.id_tribu
+      ORDER BY e.nombre
+      `
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Error al obtener exoditos' });
+  }
+});
+
+app.get('/exoditos/tribu/:id_tribu', auth, async (req, res) => {
+  const { id_tribu } = req.params;
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT *
+      FROM exodito
+      WHERE id_tribu = $1
+      ORDER BY nombre
+      `,
+      [id_tribu]
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Error al obtener exoditos por tribu' });
+  }
+});
+
+app.post('/exoditos', auth, async (req, res) => {
+  const { nombre, apellido, cargo, id_tribu } = req.body;
+
+  if (!nombre || !apellido || !id_tribu) {
+    return res.status(400).json({ error: 'Datos incompletos' });
+  }
+
+  try {
+    const result = await pool.query(
+      `
+      INSERT INTO exodito (nombre, apellido, cargo, id_tribu)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+      `,
+      [nombre, apellido, cargo || null, id_tribu]
+    );
+
+    res.json({
+      mensaje: 'Exodito creado correctamente',
+      exodito: result.rows[0]
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al crear exodito' });
+  }
+});
+app.put('/exodito/:id', auth, async (req, res) => {
+  const { id } = req.params;
+  const { nombre, apellido, cargo, id_tribu } = req.body;
+  if (!nombre || !apellido || !id_tribu) {
+    return res.status(400).json({ error: 'Datos incompletos' });
+  }
+  try {
+    const result = await pool.query(
+      `UPDATE exodito
+        SET nombre = $1, apellido = $2, cargo = $3, id_tribu = $4
+        WHERE id_exodito = $5
+        RETURNING *`,
+      [nombre, apellido, cargo || null, id_tribu, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Exodito no encontrado' });
+    }
+
+    res.json({
+      mensaje: 'Exodito actualizado correctamente',
+      exodito: result.rows[0]
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al actualizar exodito' });
+  }
+});
+
+app.delete('/exodito/:id', auth, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      `DELETE FROM exodito
+        WHERE id_exodito = $1
+        RETURNING *`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Exodito no encontrado' });
+    }
+    res.json({
+      mensaje: 'Exodito eliminado correctamente',
+      exodito: result.rows[0]
+    });
+  } catch (err) { 
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar exodito' });
+  }
+});
+
+//Asistencia Exoditos
+app.get('/asistencia/exoditos/:id_tribu/:fecha', auth, async (req, res) => {
+  const { id_tribu, fecha } = req.params;
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        e.id_exodito,
+        e.nombre,
+        e.apellido,
+        ae.estado,
+        ae.fecha
+      FROM exodito e
+      LEFT JOIN asistencia_exodito ae
+        ON e.id_exodito = ae.id_exodito
+        AND ae.fecha = $2
+      WHERE e.id_tribu = $1
+      ORDER BY e.nombre
+      `,
+      [id_tribu, fecha]
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Error al obtener asistencia de exoditos' });
+  }
+});
+
+app.post('/asistencia/exoditos', auth, async (req, res) => {
+  const { id_exodito, fecha, estado } = req.body;
+
+  if (!id_exodito || !fecha || !estado) {
+    return res.status(400).json({ error: 'Datos incompletos' });
+  }
+
+  try {
+    const existe = await pool.query(
+      `
+      SELECT 1
+      FROM asistencia_exodito
+      WHERE id_exodito = $1 AND fecha = $2
+      `,
+      [id_exodito, fecha]
+    );
+
+    if (existe.rows.length > 0) {
+      return res.status(400).json({ error: 'Asistencia ya registrada' });
+    }
+
+    const result = await pool.query(
+      `
+      INSERT INTO asistencia_exodito (id_exodito, fecha, estado)
+      VALUES ($1, $2, $3)
+      RETURNING *
+      `,
+      [id_exodito, fecha, estado]
+    );
+
+    res.json({
+      mensaje: 'Asistencia registrada',
+      asistencia: result.rows[0]
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al registrar asistencia' });
+  }
+});
+/* Railway */
 app.listen(PORT, '0.0.0.0', () => {
   console.log('🔥 Servidor escuchando en puerto', PORT);
 });
