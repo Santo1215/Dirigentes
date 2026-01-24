@@ -31,11 +31,6 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-/* Health */
-app.get('/', (req, res) => {
-  res.send('🚀 Backend Dirigentes con DB funcionando');
-});
-
 /* Login */
 app.post('/login', async (req, res) => {
   const { usuario, contrasena } = req.body;
@@ -59,8 +54,12 @@ app.post('/login', async (req, res) => {
     const token = jwt.sign(
       {
         id_dirigente: dirigente.id_dirigente,
+        nombre: dirigente.nombre,
+        apellido: dirigente.apellido,
         rol: dirigente.rol,
-        id_tribu: dirigente.id_tribu
+        comite: dirigente.comite,
+        id_tribu: dirigente.id_tribu,
+        codigo: dirigente.codigo
       },
       process.env.JWT_SECRET,
       { expiresIn: '8h' }
@@ -100,9 +99,9 @@ app.post('/dirigente', async (req, res) => {
 
     await client.query('BEGIN');
 
-    /* 1️⃣ Crear dirigente SIN usuario */
+    /* Crear dirigente SIN usuario */
     const contrasenaPlano = generarContrasena();
-    const contrasenaHash = await bcrypt.hash(contrasenaPlano, 9);
+    const contrasenaHash = await bcrypt.hash(contrasenaPlano, 12);
     const dirigenteResult = await client.query(
       `
       INSERT INTO dirigente
@@ -115,13 +114,13 @@ app.post('/dirigente', async (req, res) => {
 
     const dirigente = dirigenteResult.rows[0];
 
-    /* 2️⃣ Generar usuario automático: NombreApellidoID */
+    /* Generar usuario automático: NombreApellidoID */
     const usuarioGenerado =
       nombre.replace(/\s+/g, '').toLowerCase() +
       apellido.replace(/\s+/g, '').toLowerCase() +
       dirigente.id_dirigente;
 
-    /* 3️⃣ Actualizar dirigente con el usuario */
+    /* Actualizar dirigente con el usuario */
     await client.query(
       `
       UPDATE dirigente
@@ -131,11 +130,11 @@ app.post('/dirigente', async (req, res) => {
       [usuarioGenerado, dirigente.id_dirigente]
     );
 
-    /* 4️⃣ Generar QR personal */
+    /* Generar QR personal */
     const codigoQR = `DIR-${dirigente.nombre}-${dirigente.apellido}-${dirigente.id_dirigente}`;
     const tokenSecreto = crypto.randomBytes(16).toString('hex');
 
-    /* 5️⃣ Guardar QR */
+    /*  Guardar QR */
     await client.query(
       `
       INSERT INTO qr_personal
@@ -147,7 +146,7 @@ app.post('/dirigente', async (req, res) => {
 
     await client.query('COMMIT');
 
-    /* 6️⃣ Respuesta limpia */
+    /*  Respuesta limpia */
     res.status(201).json({
       message: 'Dirigente creado correctamente',
       dirigente: {
@@ -172,7 +171,7 @@ app.post('/dirigente', async (req, res) => {
   }
 });
 
-/* ✅ Obtener QR personal del dirigente */
+/* Obtener QR personal del dirigente */
 app.get('/dirigente/:id/qr', async (req, res) => {
   const { id } = req.params;
 
@@ -200,7 +199,7 @@ app.get('/dirigente/:id/qr', async (req, res) => {
   }
 });
 
-/* ✅ Obtener todos los dirigentes */
+/* Obtener todos los dirigentes */
 app.get('/dirigentes', async (req, res) => {
   try {
     const result = await pool.query(`
@@ -221,7 +220,7 @@ app.get('/dirigentes', async (req, res) => {
   }
 });
 
-/* ✅ Actualizar rol y comité de un dirigente */
+/*  Actualizar rol y comité de un dirigente */
 app.put('/dirigente/:id', async (req, res) => {
   const { id } = req.params;
   const { rol, comite, id_tribu} = req.body;
@@ -275,6 +274,51 @@ app.delete('/dirigente/:id', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error eliminando dirigente:', error);
+    res.status(500).json({ message: 'Error del servidor' });
+  }
+});
+
+/* Actualizar contraseña de un dirigente */
+app.put('/dirigente/:id/contrasena', async (req, res) => {
+  const { id } = req.params;
+  const { contrasenaActual, contrasenaNueva } = req.body;
+
+  if (!contrasenaActual || !contrasenaNueva) {
+    return res.status(400).json({ message: 'Datos incompletos' });
+  }
+
+  try {
+    // Buscar dirigente
+    const result = await pool.query(
+      `SELECT contrasena FROM dirigente WHERE id_dirigente = $1`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Dirigente no encontrado' });
+    }
+
+    // Validar contraseña actual
+    const contrasenaDB = result.rows[0].contrasena;
+    const valida = await bcrypt.compare(contrasenaActual, contrasenaDB);
+
+    if (!valida) {
+      return res.status(401).json({ message: 'Contraseña actual incorrecta' });
+    }
+
+    // Encriptar nueva contraseña
+    const hash = await bcrypt.hash(contrasenaNueva, 12);
+
+    // Actualizar
+    await pool.query(
+      `UPDATE dirigente SET contrasena = $1 WHERE id_dirigente = $2`,
+      [hash, id]
+    );
+
+    res.json({ message: 'Contraseña actualizada correctamente' });
+
+  } catch (error) {
+    console.error('❌ Error actualizando contraseña:', error);
     res.status(500).json({ message: 'Error del servidor' });
   }
 });
