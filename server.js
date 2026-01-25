@@ -70,7 +70,11 @@ app.post('/login', async (req, res) => {
       dirigente: {
         id_dirigente: dirigente.id_dirigente,
         nombre: dirigente.nombre,
-        rol: dirigente.rol
+        apellido: dirigente.apellido,
+        rol: dirigente.rol,
+        comite: dirigente.comite,
+        id_tribu: dirigente.id_tribu,
+        codigo: dirigente.codigo
       }
     });
   } catch (err) {
