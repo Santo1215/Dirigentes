@@ -55,6 +55,7 @@ app.post('/login', async (req, res) => {
       {
         id_dirigente: dirigente.id_dirigente,
         nombre: dirigente.nombre,
+        segundo_nombre: dirigente.segundo_nombre,
         apellido: dirigente.apellido,
         rol: dirigente.rol,
         comite: dirigente.comite,
@@ -70,6 +71,7 @@ app.post('/login', async (req, res) => {
       dirigente: {
         id_dirigente: dirigente.id_dirigente,
         nombre: dirigente.nombre,
+        segundo_nombre: dirigente.segundo_nombre,
         apellido: dirigente.apellido,
         rol: dirigente.rol,
         comite: dirigente.comite,
@@ -339,6 +341,38 @@ app.get('/tribus', async (req, res) => {
     res.status(500).json({ message: 'Error del servidor' });
   }
 });
+
+// Post /tribu/puntos
+app.post('/tribu/puntos', async (req, res) => {
+  const { id_tribu, puntos } = req.body;
+  if (typeof id_tribu !== 'number' || typeof puntos !== 'number') {
+    return res.status(400).json({ message: 'Datos inválidos' });
+  }
+  try {
+    const result = await pool.query(
+      `
+      UPDATE tribu
+      SET puntos = puntos + $1
+      WHERE id_tribu = $2
+      RETURNING puntos
+      `,
+      [puntos, id_tribu]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Tribu no encontrada' });
+    }
+
+    res.json({
+      message: 'Puntos actualizados',
+      puntos: result.rows[0].puntos,
+    });
+  } catch (error) {
+    console.error('❌ Error actualizando puntos:', error);
+    res.status(500).json({ message: 'Error del servidor' });
+  }
+});
+
 // GET /asistencia/exoditos
 app.get('/asistencia/exoditos', async (req, res) => {
   try {
@@ -525,6 +559,7 @@ app.get('/multas', auth, async (req, res) => {
         m.fecha,
         m.monto,
         m.motivo,
+        m.id_dirigente,
         d.nombre,
         d.apellido
       FROM multa m
