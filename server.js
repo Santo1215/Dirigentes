@@ -214,7 +214,8 @@ app.get('/dirigentes', async (req, res) => {
         nombre,
         apellido,
         rol,
-        comite
+        comite,
+        id_tribu,
       FROM dirigente
       ORDER BY nombre ASC
     `);
@@ -397,6 +398,7 @@ app.get('/asistencia/exoditos', async (req, res) => {
   }
 });
 
+//Asistencia via QR
 app.post('/asistencia/qr', auth, async (req, res) => {
   const { codigo_qr } = req.body;
 
@@ -409,31 +411,26 @@ app.post('/asistencia/qr', auth, async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    // 1️⃣ Buscar QR
     const qrResult = await client.query(
-      `SELECT * FROM qr_personal
-       WHERE codigo_qr = $1`,
+      `SELECT *
+       FROM qr_personal
+       WHERE codigo_qr = $1
+       AND fecha_expiracion >= CURRENT_DATE`,
       [codigo_qr]
     );
 
     if (qrResult.rows.length === 0) {
       await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'QR no válido' });
+      return res.status(404).json({ error: 'QR inválido o expirado' });
     }
 
     const qr = qrResult.rows[0];
 
-    // 2️⃣ Verificar expiración
-    const hoy = new Date();
-    if (new Date(qr.fecha_expiracion) < hoy) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'QR expirado' });
-    }
-
-    // 3️⃣ Verificar asistencia duplicada (mismo día)
     const existe = await client.query(
-      `SELECT 1 FROM asistencia
-       WHERE id_dirigente = $1 AND fecha = CURRENT_DATE`,
+      `SELECT 1
+       FROM asistencia
+       WHERE id_dirigente = $1
+       AND DATE(created_at) = CURRENT_DATE`,
       [qr.id_dirigente]
     );
 
@@ -442,19 +439,17 @@ app.post('/asistencia/qr', auth, async (req, res) => {
       return res.status(400).json({ error: 'Asistencia ya registrada hoy' });
     }
 
-    // 4️⃣ Registrar asistencia
     const asistencia = await client.query(
       `INSERT INTO asistencia
-       (id_dirigente, hora_llegada, estado, metodo_registro)
-       VALUES ($1, CURRENT_TIME, 'Presente', 'QR')
+       (id_dirigente, fecha, hora_llegada, estado, metodo_registro)
+       VALUES ($1, CURRENT_DATE, CURRENT_TIME, 'Presente', 'QR')
        RETURNING *`,
       [qr.id_dirigente]
     );
 
-    // 5️⃣ Actualizar QR
     await client.query(
       `UPDATE qr_personal
-       SET veces_usado = veces_usado + 1,
+       SET veces_usado = COALESCE(veces_usado, 0) + 1,
            ultimo_uso = CURRENT_TIMESTAMP
        WHERE id_qr = $1`,
       [qr.id_qr]
@@ -468,12 +463,14 @@ app.post('/asistencia/qr', auth, async (req, res) => {
     });
 
   } catch (err) {
+    console.error('ERROR QR:', err);
     await client.query('ROLLBACK');
     res.status(500).json({ error: 'Error al registrar asistencia' });
   } finally {
     client.release();
   }
 });
+
 
 app.post('/asistencia/manual', auth, async (req, res) => {
   const { id_dirigente, estado } = req.body;
