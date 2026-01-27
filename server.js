@@ -215,7 +215,7 @@ app.get('/dirigentes', async (req, res) => {
         apellido,
         rol,
         comite,
-        id_tribu,
+        id_tribu
       FROM dirigente
       ORDER BY nombre ASC
     `);
@@ -476,13 +476,26 @@ app.post('/asistencia/qr', auth, async (req, res) => {
 
 
 app.post('/asistencia/manual', auth, async (req, res) => {
-  const { id_dirigente, estado } = req.body;
+  const { codigo } = req.body;
 
-  if (!id_dirigente || !estado) {
-    return res.status(400).json({ error: 'Datos incompletos' });
+  if (!codigo) {
+    return res.status(400).json({ error: 'Código requerido' });
   }
 
   try {
+    // Buscar dirigente por código
+    const dirigente = await pool.query(
+      `SELECT id_dirigente FROM dirigente WHERE codigo = $1`,
+      [codigo]
+    );
+
+    if (dirigente.rows.length === 0) {
+      return res.status(404).json({ error: 'Código inválido' });
+    }
+
+    const id_dirigente = dirigente.rows[0].id_dirigente;
+
+    // Verificar si ya marcó hoy
     const existe = await pool.query(
       `SELECT 1 FROM asistencia
        WHERE id_dirigente = $1 AND fecha = CURRENT_DATE`,
@@ -493,23 +506,26 @@ app.post('/asistencia/manual', auth, async (req, res) => {
       return res.status(400).json({ error: 'Asistencia ya registrada hoy' });
     }
 
+    // Registrar asistencia
     const result = await pool.query(
       `INSERT INTO asistencia
        (id_dirigente, hora_llegada, estado, metodo_registro)
-       VALUES ($1, CURRENT_TIME, $2, 'Manual')
+       VALUES ($1, CURRENT_TIME, 'Presente', 'Manual')
        RETURNING *`,
-      [id_dirigente, estado]
+      [id_dirigente]
     );
 
     res.json({
-      mensaje: 'Asistencia registrada manualmente',
-      asistencia: result.rows[0]
+      mensaje: 'Asistencia registrada',
+      asistencia: result.rows[0],
     });
 
-  } catch (err) {
+  } catch (error) {
+    console.error(error);
     res.status(500).json({ error: 'Error al registrar asistencia manual' });
   }
 });
+
 
 app.get('/asistencia/fecha/:fecha', auth, async (req, res) => {
   const { fecha } = req.params;
