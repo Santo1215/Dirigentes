@@ -430,7 +430,7 @@ app.post('/asistencia/qr', auth, async (req, res) => {
       `SELECT 1
        FROM asistencia
        WHERE id_dirigente = $1
-       AND DATE(created_at) = CURRENT_DATE`,
+       AND fecha = CURRENT_DATE`,
       [qr.id_dirigente]
     );
 
