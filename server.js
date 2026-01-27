@@ -463,9 +463,12 @@ app.post('/asistencia/qr', auth, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('ERROR QR:', err);
-    await client.query('ROLLBACK');
-    res.status(500).json({ error: 'Error al registrar asistencia' });
+  await client.query('ROLLBACK');
+  console.error('ERROR ASISTENCIA QR:', err);
+  res.status(500).json({
+    error: 'Error al registrar asistencia',
+    detalle: err.message
+  });
   } finally {
     client.release();
   }
