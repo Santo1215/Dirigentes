@@ -87,6 +87,7 @@ app.post('/login', async (req, res) => {
 app.post('/dirigente', async (req, res) => {
   const {
     nombre,
+    segundo_nombre,
     apellido,
     rol,
     comite,
@@ -111,11 +112,11 @@ app.post('/dirigente', async (req, res) => {
     const dirigenteResult = await client.query(
       `
       INSERT INTO dirigente
-      (nombre, apellido, rol, comite, id_tribu, contrasena)
-      VALUES ($1,$2,$3,$4,$5,$6)
+      (nombre, segundo_nombre, apellido, rol, comite, id_tribu, contrasena)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
       RETURNING *
       `,
-      [nombre, apellido, rol, comite, id_tribu, contrasenaHash]
+      [nombre, segundo_nombre, apellido, rol, comite, id_tribu, contrasenaHash]
     );
 
     const dirigente = dirigenteResult.rows[0];
