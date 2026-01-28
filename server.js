@@ -256,7 +256,7 @@ app.put('/dirigente/:id', async (req, res) => {
       dirigente: result.rows[0],
     });
   } catch (error) {
-    console.error('❌ Error actualizando dirigente:', error);
+    console.error(' Error actualizando dirigente:', error);
     res.status(500).json({ message: 'Error del servidor' });
   }
 });
@@ -338,7 +338,7 @@ app.get('/tribus', async (req, res) => {
     );
     res.json(result.rows);
   } catch (error) {
-    console.error('❌ Error obteniendo tribus:', error);
+    console.error(' Error obteniendo tribus:', error);
     res.status(500).json({ message: 'Error del servidor' });
   }
 });
@@ -397,6 +397,41 @@ app.get('/asistencia/exoditos', async (req, res) => {
     res.status(500).json({ message: 'Error del servidor' });
   }
 });
+
+// POST /asistencia/exoditos
+app.post('/asistencia/exoditos', auth, async (req, res) => {
+  const { asistencias } = req.body;
+
+  if (!Array.isArray(asistencias) || asistencias.length === 0) {
+    return res.status(400).json({ error: 'No hay asistencias para registrar' });
+  }
+
+  try {
+    const queries = asistencias.map(({ id_exodito, estado }) =>
+      pool.query(
+        `
+        INSERT INTO asistencia_exodito (id_exodito, fecha, estado)
+        VALUES ($1, CURRENT_DATE, $2)
+        ON CONFLICT (id_exodito, fecha) DO UPDATE
+        SET estado = EXCLUDED.estado
+        `,
+        [id_exodito, estado]
+      )
+    );
+
+    await Promise.all(queries);
+
+    res.json({
+      message: 'Asistencia de exoditos registrada correctamente',
+      total: asistencias.length,
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al registrar asistencia de exoditos' });
+  }
+});
+
 
 //Asistencia via QR
 app.post('/asistencia/qr', auth, async (req, res) => {
@@ -530,10 +565,6 @@ app.post('/asistencia/manual', auth, async (req, res) => {
 app.get('/asistencia/fecha/:fecha', auth, async (req, res) => {
   const { fecha } = req.params;
 
-  if (!fecha) {
-    return res.status(400).json({ error: 'Fecha requerida' });
-  }
-
   try {
     const result = await pool.query(
       `
@@ -542,12 +573,10 @@ app.get('/asistencia/fecha/:fecha', auth, async (req, res) => {
         d.nombre,
         d.apellido,
         d.rol,
-        d.comite,
         a.id_asistencia,
-        a.fecha,
-        a.hora_llegada,
         a.estado,
-        a.metodo_registro
+        a.metodo_registro,
+        a.hora_llegada
       FROM dirigente d
       LEFT JOIN asistencia a
         ON d.id_dirigente = a.id_dirigente
@@ -558,12 +587,57 @@ app.get('/asistencia/fecha/:fecha', auth, async (req, res) => {
     );
 
     res.json(result.rows);
-
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al obtener asistencia' });
   }
 });
+app.put('/asistencia', auth, async (req, res) => {
+  const { id_dirigente, fecha, estado } = req.body;
+
+  if (!id_dirigente || !fecha || !estado) {
+    return res.status(400).json({ error: 'Datos incompletos' });
+  }
+
+  try {
+    const existe = await pool.query(
+      `
+      SELECT id_asistencia FROM asistencia
+      WHERE id_dirigente = $1 AND fecha = $2
+      `,
+      [id_dirigente, fecha]
+    );
+
+    if (existe.rows.length > 0) {
+      // 🔁 Update
+      await pool.query(
+        `
+        UPDATE asistencia
+        SET estado = $1
+        WHERE id_dirigente = $2 AND fecha = $3
+        `,
+        [estado, id_dirigente, fecha]
+      );
+    } else {
+      // ➕ Insert
+      await pool.query(
+        `
+        INSERT INTO asistencia
+        (id_dirigente, fecha, hora_llegada, estado, metodo_registro)
+        VALUES ($1, $2, CURRENT_TIME, $3, 'Manual')
+        `,
+        [id_dirigente, fecha, estado]
+      );
+    }
+
+    res.json({ mensaje: 'Asistencia actualizada' });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al actualizar asistencia' });
+  }
+});
+
 
 // Multas
 app.get('/multas', auth, async (req, res) => {
