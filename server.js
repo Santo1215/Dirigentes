@@ -857,31 +857,29 @@ app.delete('/exodito/:id', auth, async (req, res) => {
 });
 
 //Asistencia Exoditos
-app.get('/asistencia/exoditos/:id_tribu/:fecha', auth, async (req, res) => {
-  const { id_tribu, fecha } = req.params;
+app.get('/asistencia/exoditos/:fecha', auth, async (req, res) => {
+  const { fecha } = req.params;
 
   try {
-    const result = await pool.query(
-      `
+    const result = await pool.query(`
       SELECT
+        t.nombre AS tribu,
         e.id_exodito,
         e.nombre,
         e.apellido,
-        ae.estado,
-        ae.fecha
+        ae.estado
       FROM exodito e
+      JOIN tribu t ON t.id_tribu = e.id_tribu
       LEFT JOIN asistencia_exodito ae
-        ON e.id_exodito = ae.id_exodito
-        AND ae.fecha = $2
-      WHERE e.id_tribu = $1
-      ORDER BY e.nombre
-      `,
-      [id_tribu, fecha]
-    );
+        ON ae.id_exodito = e.id_exodito
+        AND ae.fecha = $1
+      ORDER BY t.nombre, e.nombre
+    `, [fecha]);
 
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: 'Error al obtener asistencia de exoditos' });
+    console.error(err);
+    res.status(500).json({ error: 'Error al obtener asistencia' });
   }
 });
 
