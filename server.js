@@ -9,6 +9,11 @@ import bcrypt from 'bcryptjs';
 import pool from './db.js';
 import auth from './auth.js';
 
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const PORT = process.env.PORT || 3000;
 
 app.use(
   '/uploads',
@@ -51,15 +56,6 @@ async function generarCodigoUnico(client) {
 function generarCodigo(min = 2000000, max = 29999999) {
   return Math.floor(Math.random() * (max - min + 1) + min).toString();
 }
-
-
-
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-const PORT = process.env.PORT || 3000;
 
 /* Login */
 app.post('/login', async (req, res) => {
