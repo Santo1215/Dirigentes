@@ -86,7 +86,8 @@ app.post('/login', async (req, res) => {
         rol: dirigente.rol,
         comite: dirigente.comite,
         id_tribu: dirigente.id_tribu,
-        codigo: dirigente.codigo
+        codigo: dirigente.codigo,
+        foto: dirigente.foto
       },
       process.env.JWT_SECRET,
       { expiresIn: '8h' }
@@ -102,7 +103,8 @@ app.post('/login', async (req, res) => {
         rol: dirigente.rol,
         comite: dirigente.comite,
         id_tribu: dirigente.id_tribu,
-        codigo: dirigente.codigo
+        codigo: dirigente.codigo,
+        foto: dirigente.foto
       }
     });
   } catch (err) {
@@ -260,14 +262,15 @@ app.get('/dirigentes', async (req, res) => {
         apellido,
         rol,
         comite,
-        id_tribu
+        id_tribu,
+        foto
       FROM dirigente
       ORDER BY nombre ASC
     `);
 
     res.json(result.rows);
   } catch (error) {
-    console.error('❌ Error obteniendo dirigentes:', error);
+    console.error(' Error obteniendo dirigentes:', error);
     res.status(500).json({ message: 'Error del servidor' });
   }
 });
