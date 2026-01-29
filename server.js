@@ -1,12 +1,14 @@
-require('dotenv').config();
+import 'dotenv/config';
 import path from 'path';
-const express = require('express');
-const cors = require('cors');
-const pool = require('./db');
-const crypto = require('crypto');
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
-const auth = require('./auth');
+import express from 'express';
+import cors from 'cors';
+import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
+
+import pool from './db.js';
+import auth from './auth.js';
+
 
 app.use(
   '/uploads',
