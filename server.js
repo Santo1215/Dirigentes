@@ -259,6 +259,7 @@ app.get('/dirigentes', async (req, res) => {
       SELECT 
         id_dirigente,
         nombre,
+        segundo_nombre,
         apellido,
         rol,
         comite,
