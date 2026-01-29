@@ -116,7 +116,16 @@ app.post('/dirigente', async (req, res) => {
       VALUES ($1,$2,$3,$4,$5,$6,$7)
       RETURNING *
       `,
-      [nombre, segundo_nombre, apellido, rol, comite, id_tribu, contrasenaHash]
+      [
+        nombre,
+        segundo_nombre && segundo_nombre.trim() !== '' ? segundo_nombre : null,
+        apellido,
+        rol,
+        comite,
+        id_tribu,
+        contrasenaHash
+      ]
+
     );
 
     const dirigente = dirigenteResult.rows[0];
@@ -171,8 +180,9 @@ app.post('/dirigente', async (req, res) => {
 
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error('❌ Error creando dirigente:', error);
-    res.status(500).json({ message: 'Error del servidor' });
+    console.error('Error creando dirigente');
+    console.error(error.message);
+    console.error(error.detail);
   } finally {
     client.release();
   }
