@@ -1,4 +1,5 @@
 require('dotenv').config();
+import path from 'path';
 const express = require('express');
 const cors = require('cors');
 const pool = require('./db');
@@ -6,6 +7,11 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const auth = require('./auth');
+
+app.use(
+  '/uploads',
+  express.static(path.join(process.cwd(), 'uploads'))
+);
 
 function generarContrasena(longitud = 9) {
   const mayus = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
