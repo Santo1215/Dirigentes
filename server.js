@@ -25,6 +25,28 @@ function generarContrasena(longitud = 9) {
   return contrasena.split('').sort(() => 0.5 - Math.random()).join('');
 }
 
+async function generarCodigoUnico(client) {
+  let codigo;
+  let existe = true;
+
+  while (existe) {
+    codigo = generarCodigo();
+    const check = await client.query(
+      'SELECT 1 FROM dirigente WHERE codigo = $1',
+      [codigo]
+    );
+    existe = check.rowCount > 0;
+  }
+
+  return codigo;
+}
+function generarCodigo(min = 2000000, max = 29999999) {
+  return Math.floor(Math.random() * (max - min + 1) + min).toString();
+}
+
+
+
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -108,12 +130,13 @@ app.post('/dirigente', async (req, res) => {
 
     /* Crear dirigente SIN usuario */
     const contrasenaPlano = generarContrasena();
+    const codigo = await generarCodigoUnico(client);
     const contrasenaHash = await bcrypt.hash(contrasenaPlano, 12);
     const dirigenteResult = await client.query(
       `
       INSERT INTO dirigente
-      (nombre, segundo_nombre, apellido, rol, comite, id_tribu, contrasena)
-      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      (nombre, segundo_nombre, apellido, rol, comite, id_tribu, contrasena, codigo)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
       RETURNING *
       `,
       [
@@ -123,7 +146,8 @@ app.post('/dirigente', async (req, res) => {
         rol,
         comite,
         id_tribu,
-        contrasenaHash
+        contrasenaHash,
+        codigo
       ]
 
     );
@@ -132,8 +156,8 @@ app.post('/dirigente', async (req, res) => {
 
     /* Generar usuario automático: NombreApellidoID */
     const usuarioGenerado =
-      nombre.replace(/\s+/g, '').toLowerCase() +
-      apellido.replace(/\s+/g, '').toLowerCase() +
+      nombre.replace(/\s+/g, '') +
+      apellido.replace(/\s+/g, '') +
       dirigente.id_dirigente;
 
     /* Actualizar dirigente con el usuario */
@@ -171,6 +195,7 @@ app.post('/dirigente', async (req, res) => {
         apellido: dirigente.apellido,
         usuario: usuarioGenerado,
         contrasena: contrasenaPlano,
+        codigo: codigo,
         rol: dirigente.rol,
         comite: dirigente.comite,
         id_tribu: dirigente.id_tribu,
@@ -183,6 +208,11 @@ app.post('/dirigente', async (req, res) => {
     console.error('Error creando dirigente');
     console.error(error.message);
     console.error(error.detail);
+    return res.status(500).json({
+    message: 'Error creando dirigente',
+    error: error.message,
+    detail: error.detail,
+  });
   } finally {
     client.release();
   }
