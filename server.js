@@ -62,7 +62,10 @@ app.post('/login', async (req, res) => {
   const { usuario, contrasena } = req.body;
   try {
     const result = await pool.query(
-      'SELECT * FROM dirigente WHERE usuario = $1',
+      `SELECT d.*, t.nombre AS nombre_tribu
+       FROM dirigente d
+       LEFT JOIN tribu t ON t.id_tribu = d.id_tribu
+       WHERE d.usuario = $1`,
       [usuario]
     );
 
@@ -103,6 +106,7 @@ app.post('/login', async (req, res) => {
         rol: dirigente.rol,
         comite: dirigente.comite,
         id_tribu: dirigente.id_tribu,
+        tribu: dirigente.nombre_tribu,
         codigo: dirigente.codigo,
         foto: dirigente.foto
       }
@@ -130,7 +134,7 @@ app.post('/dirigente', async (req, res) => {
   const client = await pool.connect();
 
   try {
-    
+
 
     await client.query('BEGIN');
 
@@ -215,10 +219,10 @@ app.post('/dirigente', async (req, res) => {
     console.error(error.message);
     console.error(error.detail);
     return res.status(500).json({
-    message: 'Error creando dirigente',
-    error: error.message,
-    detail: error.detail,
-  });
+      message: 'Error creando dirigente',
+      error: error.message,
+      detail: error.detail,
+    });
   } finally {
     client.release();
   }
@@ -279,7 +283,7 @@ app.get('/dirigentes', async (req, res) => {
 /*  Actualizar rol y comité de un dirigente */
 app.put('/dirigente/:id', async (req, res) => {
   const { id } = req.params;
-  const { rol, comite, id_tribu} = req.body;
+  const { rol, comite, id_tribu } = req.body;
 
   if (!rol) {
     return res.status(400).json({ message: 'El rol es obligatorio' });
@@ -547,12 +551,12 @@ app.post('/asistencia/qr', auth, async (req, res) => {
     });
 
   } catch (err) {
-  await client.query('ROLLBACK');
-  console.error('ERROR ASISTENCIA QR:', err);
-  res.status(500).json({
-    error: 'Error al registrar asistencia',
-    detalle: err.message
-  });
+    await client.query('ROLLBACK');
+    console.error('ERROR ASISTENCIA QR:', err);
+    res.status(500).json({
+      error: 'Error al registrar asistencia',
+      detalle: err.message
+    });
   } finally {
     client.release();
   }
@@ -899,7 +903,7 @@ app.delete('/exodito/:id', auth, async (req, res) => {
       mensaje: 'Exodito eliminado correctamente',
       exodito: result.rows[0]
     });
-  } catch (err) { 
+  } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al eliminar exodito' });
   }
