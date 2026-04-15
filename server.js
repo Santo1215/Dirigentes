@@ -317,24 +317,41 @@ app.put('/dirigente/:id', async (req, res) => {
 /* Eliminar dirigente */
 app.delete('/dirigente/:id', async (req, res) => {
   const { id } = req.params;
+  const client = await pool.connect();
 
   try {
-    const result = await pool.query(
-      'DELETE FROM dirigente WHERE id_dirigente = $1 RETURNING nombre, apellido',
+    await client.query('BEGIN');
+
+    // Verificar que el dirigente existe
+    const check = await client.query(
+      'SELECT nombre, apellido FROM dirigente WHERE id_dirigente = $1',
       [id]
     );
-
-    if (result.rows.length === 0) {
+    if (check.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ message: 'Dirigente no encontrado' });
     }
 
+    // Eliminar registros dependientes en orden
+    await client.query('DELETE FROM multa WHERE id_dirigente = $1', [id]);
+    await client.query('DELETE FROM asistencia WHERE id_dirigente = $1', [id]);
+    await client.query('DELETE FROM qr_personal WHERE id_dirigente = $1', [id]);
+
+    // Ahora sí eliminar el dirigente
+    await client.query('DELETE FROM dirigente WHERE id_dirigente = $1', [id]);
+
+    await client.query('COMMIT');
+
     res.json({
       message: 'Dirigente eliminado',
-      dirigente: result.rows[0],
+      dirigente: check.rows[0],
     });
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('❌ Error eliminando dirigente:', error);
     res.status(500).json({ message: 'Error del servidor' });
+  } finally {
+    client.release();
   }
 });
 
@@ -530,7 +547,7 @@ app.post('/asistencia/qr', auth, async (req, res) => {
     const asistencia = await client.query(
       `INSERT INTO asistencia
        (id_dirigente, fecha, hora_llegada, estado, metodo_registro)
-       VALUES ($1, CURRENT_DATE, CURRENT_TIME, 'Presente', 'QR')
+       VALUES ($1, CURRENT_DATE, (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::time, 'Presente', 'QR')
        RETURNING *`,
       [qr.id_dirigente]
     );
@@ -598,7 +615,7 @@ app.post('/asistencia/manual', auth, async (req, res) => {
     const result = await pool.query(
       `INSERT INTO asistencia
        (id_dirigente, hora_llegada, estado, metodo_registro)
-       VALUES ($1, CURRENT_TIME, 'Presente', 'Manual')
+       VALUES ($1, (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::time, 'Presente', 'Manual')
        RETURNING *`,
       [id_dirigente]
     );
@@ -677,7 +694,7 @@ app.put('/asistencia', auth, async (req, res) => {
         `
         INSERT INTO asistencia
         (id_dirigente, fecha, hora_llegada, estado, metodo_registro)
-        VALUES ($1, $2, CURRENT_TIME, $3, 'Manual')
+        VALUES ($1, $2, (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::time, $3, 'Manual')
         `,
         [id_dirigente, fecha, estado]
       );
