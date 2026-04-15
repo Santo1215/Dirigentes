@@ -719,7 +719,7 @@ app.get('/multas', auth, async (req, res) => {
         m.fecha,
         m.monto,
         m.motivo,
-        m."Detalle",
+        m.detalle,
         m.id_dirigente,
         d.nombre,
         d.apellido
@@ -747,7 +747,7 @@ app.get('/multas/dirigente/:id', auth, async (req, res) => {
         fecha,
         monto,
         motivo,
-        "Detalle",
+        detalle,
         id_dirigente
       FROM multa
       WHERE id_dirigente = $1
@@ -774,7 +774,7 @@ app.post('/multas', auth, async (req, res) => {
   try {
     const result = await pool.query(
       `INSERT INTO multa
-       (id_dirigente, "Detalle", monto, motivo)
+       (id_dirigente, detalle, monto, motivo)
        VALUES ($1, $2, $3, $4)
        RETURNING *`,
       [id_dirigente, Detalle || null, monto, motivo]
