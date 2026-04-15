@@ -719,6 +719,7 @@ app.get('/multas', auth, async (req, res) => {
         m.fecha,
         m.monto,
         m.motivo,
+        m."Detalle",
         m.id_dirigente,
         d.nombre,
         d.apellido
@@ -741,7 +742,13 @@ app.get('/multas/dirigente/:id', auth, async (req, res) => {
   try {
     const result = await pool.query(
       `
-      SELECT *
+      SELECT
+        id_multa,
+        fecha,
+        monto,
+        motivo,
+        "Detalle",
+        id_dirigente
       FROM multa
       WHERE id_dirigente = $1
       ORDER BY fecha DESC
@@ -758,7 +765,7 @@ app.get('/multas/dirigente/:id', auth, async (req, res) => {
 
 
 app.post('/multas', auth, async (req, res) => {
-  const { id_dirigente, id_asistencia, monto, motivo } = req.body;
+  const { id_dirigente, Detalle, monto, motivo } = req.body;
 
   if (!id_dirigente || !monto || !motivo) {
     return res.status(400).json({ error: 'Datos incompletos' });
@@ -767,10 +774,10 @@ app.post('/multas', auth, async (req, res) => {
   try {
     const result = await pool.query(
       `INSERT INTO multa
-       (id_dirigente, id_asistencia, monto, motivo)
+       (id_dirigente, "Detalle", monto, motivo)
        VALUES ($1, $2, $3, $4)
        RETURNING *`,
-      [id_dirigente, id_asistencia || null, monto, motivo]
+      [id_dirigente, Detalle || null, monto, motivo]
     );
 
     res.json({
