@@ -62,7 +62,7 @@ app.post('/login', async (req, res) => {
   const { usuario, contrasena } = req.body;
   try {
     const result = await pool.query(
-      `SELECT d.*, t.nombre AS nombre_tribu
+      `SELECT d.*, t.nombre AS nombre_tribu, t.drive AS tribu_drive
        FROM dirigente d
        LEFT JOIN tribu t ON t.id_tribu = d.id_tribu
        WHERE d.usuario = $1`,
@@ -106,7 +106,9 @@ app.post('/login', async (req, res) => {
         rol: dirigente.rol,
         comite: dirigente.comite,
         id_tribu: dirigente.id_tribu,
+        id_tribu_secundaria: dirigente.id_tribu_secundaria || null,
         tribu: dirigente.nombre_tribu,
+        drive: dirigente.tribu_drive,
         codigo: dirigente.codigo,
         foto: dirigente.foto
       }
@@ -268,6 +270,7 @@ app.get('/dirigentes', async (req, res) => {
         rol,
         comite,
         id_tribu,
+        id_tribu_secundaria,
         foto
       FROM dirigente
       ORDER BY nombre ASC
@@ -283,7 +286,7 @@ app.get('/dirigentes', async (req, res) => {
 /*  Actualizar rol y comité de un dirigente */
 app.put('/dirigente/:id', async (req, res) => {
   const { id } = req.params;
-  const { rol, comite, id_tribu } = req.body;
+  const { rol, comite, id_tribu, id_tribu_secundaria } = req.body;
 
   if (!rol) {
     return res.status(400).json({ message: 'El rol es obligatorio' });
@@ -293,11 +296,11 @@ app.put('/dirigente/:id', async (req, res) => {
     const result = await pool.query(
       `
       UPDATE dirigente
-      SET rol = $1, comite = $2, id_tribu = $3
-      WHERE id_dirigente = $4
-      RETURNING id_dirigente, nombre, apellido, rol, comite
+      SET rol = $1, comite = $2, id_tribu = $3, id_tribu_secundaria = $4
+      WHERE id_dirigente = $5
+      RETURNING id_dirigente, nombre, apellido, rol, comite, id_tribu, id_tribu_secundaria
       `,
-      [rol, comite || null, id_tribu || null, id]
+      [rol, comite || null, id_tribu || null, id_tribu_secundaria || null, id]
     );
 
     if (result.rows.length === 0) {
@@ -404,7 +407,7 @@ app.put('/dirigente/:id/contrasena', async (req, res) => {
 app.get('/tribus', async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id_tribu, nombre, puntos, color_hex FROM tribu ORDER BY id_tribu'
+      'SELECT id_tribu, nombre, puntos, color_hex, drive FROM tribu ORDER BY id_tribu'
     );
     res.json(result.rows);
   } catch (error) {
