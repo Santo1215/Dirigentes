@@ -473,22 +473,28 @@ app.get('/asistencia/exoditos', async (req, res) => {
 
 // POST /asistencia/exoditos
 app.post('/asistencia/exoditos', auth, async (req, res) => {
-  const { asistencias } = req.body;
+  const { asistencias, fecha } = req.body;
 
   if (!Array.isArray(asistencias) || asistencias.length === 0) {
     return res.status(400).json({ error: 'No hay asistencias para registrar' });
   }
+
+  // Usar la fecha local enviada por el cliente (YYYY-MM-DD).
+  // Si no viene, usar CURRENT_DATE del servidor como fallback.
+  const fechaRegistro = fecha && /^\d{4}-\d{2}-\d{2}$/.test(fecha)
+    ? fecha
+    : new Date().toISOString().slice(0, 10);
 
   try {
     const queries = asistencias.map(({ id_exodito, estado }) =>
       pool.query(
         `
         INSERT INTO asistencia_exodito (id_exodito, fecha, estado)
-        VALUES ($1, CURRENT_DATE, $2)
+        VALUES ($1, $2, $3)
         ON CONFLICT (id_exodito, fecha) DO UPDATE
         SET estado = EXCLUDED.estado
         `,
-        [id_exodito, estado]
+        [id_exodito, fechaRegistro, estado]
       )
     );
 
@@ -497,6 +503,7 @@ app.post('/asistencia/exoditos', auth, async (req, res) => {
     res.json({
       message: 'Asistencia de exoditos registrada correctamente',
       total: asistencias.length,
+      fecha: fechaRegistro,
     });
 
   } catch (err) {
