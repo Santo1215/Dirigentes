@@ -20,6 +20,24 @@ app.use(
   express.static(path.join(process.cwd(), 'uploads'))
 );
 
+/* Auto-crear tabla push_tokens si no existe */
+(async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS push_tokens (
+        id SERIAL PRIMARY KEY,
+        id_dirigente INTEGER REFERENCES dirigente(id_dirigente) ON DELETE CASCADE,
+        token TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(id_dirigente, token)
+      );
+    `);
+    console.log('✅ Tabla push_tokens lista');
+  } catch (err) {
+    console.error('❌ Error creando tabla push_tokens:', err.message);
+  }
+})();
+
 function generarContrasena(longitud = 9) {
   const mayus = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   const minus = 'abcdefghijklmnopqrstuvwxyz';
@@ -1008,6 +1026,133 @@ app.post('/asistencia/exoditos', auth, async (req, res) => {
     res.status(500).json({ error: 'Error al registrar asistencia' });
   }
 });
+/* Eliminar TODA la asistencia de exoditos */
+app.delete('/asistencia/exoditos', auth, async (req, res) => {
+  try {
+    const result = await pool.query(`DELETE FROM asistencia_exodito`);
+
+    res.json({
+      mensaje: 'Asistencia de exoditos eliminada',
+      eliminados: result.rowCount,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar asistencia de exoditos' });
+  }
+});
+
+/* Eliminar TODA la asistencia de dirigentes */
+app.delete('/asistencia/dirigentes', auth, async (req, res) => {
+  try {
+    const result = await pool.query(`DELETE FROM asistencia`);
+
+    res.json({
+      mensaje: 'Asistencia de dirigentes eliminada',
+      eliminados: result.rowCount,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar asistencia de dirigentes' });
+  }
+});
+
+/* ===============================
+   Push Tokens
+=============================== */
+
+/* Guardar push token del dirigente */
+app.post('/push-token', auth, async (req, res) => {
+  const { token } = req.body;
+  const id_dirigente = req.user.id_dirigente;
+
+  if (!token) {
+    return res.status(400).json({ error: 'Token requerido' });
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO push_tokens (id_dirigente, token)
+       VALUES ($1, $2)
+       ON CONFLICT (id_dirigente, token) DO NOTHING`,
+      [id_dirigente, token]
+    );
+
+    res.json({ mensaje: 'Push token registrado' });
+  } catch (err) {
+    console.error('❌ Error guardando push token:', err);
+    res.status(500).json({ error: 'Error al guardar push token' });
+  }
+});
+
+/* Enviar notificación de recordatorio a todos los dirigentes */
+app.post('/notificacion/recordatorio-tribu', auth, async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT DISTINCT token FROM push_tokens`);
+    const tokens = result.rows.map(r => r.token);
+
+    if (tokens.length === 0) {
+      return res.status(400).json({
+        error: 'No hay dispositivos registrados para recibir notificaciones'
+      });
+    }
+
+    // Construir mensajes para Expo Push API (máx 100 por request)
+    const messages = tokens.map(token => ({
+      to: token,
+      sound: 'default',
+      title: '📋 Recordatorio de Asistencia',
+      body: 'RECUERDA TOMAR LA ASISTENCIA DE LA TRIBU',
+      data: { tipo: 'recordatorio_tribu' },
+    }));
+
+    // Enviar en lotes de 100 (límite de Expo)
+    const chunks = [];
+    for (let i = 0; i < messages.length; i += 100) {
+      chunks.push(messages.slice(i, i + 100));
+    }
+
+    let enviados = 0;
+    let errores = 0;
+
+    for (const chunk of chunks) {
+      try {
+        const response = await fetch('https://exp.host/--/api/v2/push/send', {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Accept-encoding': 'gzip, deflate',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(chunk),
+        });
+
+        const data = await response.json();
+
+        if (data.data) {
+          data.data.forEach(ticket => {
+            if (ticket.status === 'ok') enviados++;
+            else errores++;
+          });
+        }
+      } catch (err) {
+        console.error('Error enviando chunk de notificaciones:', err);
+        errores += chunk.length;
+      }
+    }
+
+    res.json({
+      mensaje: 'Notificaciones enviadas',
+      enviados,
+      errores,
+      total_dispositivos: tokens.length,
+    });
+
+  } catch (err) {
+    console.error('❌ Error enviando notificaciones:', err);
+    res.status(500).json({ error: 'Error al enviar notificaciones' });
+  }
+});
+
 /* Railway */
 app.listen(PORT, '0.0.0.0', () => {
   console.log('🔥 Servidor escuchando en puerto', PORT);
