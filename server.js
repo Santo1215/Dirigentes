@@ -6,8 +6,16 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 
+import webpush from 'web-push';
+
 import pool from './db.js';
 import auth from './auth.js';
+
+webpush.setVapidDetails(
+  process.env.VAPID_SUBJECT || 'mailto:cambia-esto@tu-dominio.com',
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
 
 const app = express();
 app.use(cors());
@@ -35,6 +43,26 @@ app.use(
     console.log('✅ Tabla push_tokens lista');
   } catch (err) {
     console.error('❌ Error creando tabla push_tokens:', err.message);
+  }
+})();
+
+/* Auto-crear tabla web_push_subscriptions si no existe (notificaciones web) */
+(async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS web_push_subscriptions (
+        id SERIAL PRIMARY KEY,
+        id_dirigente INTEGER REFERENCES dirigente(id_dirigente) ON DELETE CASCADE,
+        endpoint TEXT NOT NULL,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(id_dirigente, endpoint)
+      );
+    `);
+    console.log('✅ Tabla web_push_subscriptions lista');
+  } catch (err) {
+    console.error('❌ Error creando tabla web_push_subscriptions:', err.message);
   }
 })();
 
@@ -1084,67 +1112,127 @@ app.post('/push-token', auth, async (req, res) => {
   }
 });
 
+/* Guardar suscripción de Web Push del dirigente (versión web) */
+app.post('/push-token/web', auth, async (req, res) => {
+  const { subscription } = req.body;
+  const id_dirigente = req.user.id_dirigente;
+
+  if (!subscription || !subscription.endpoint || !subscription.keys) {
+    return res.status(400).json({ error: 'Suscripción inválida' });
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO web_push_subscriptions (id_dirigente, endpoint, p256dh, auth)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id_dirigente, endpoint) DO UPDATE
+       SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth`,
+      [id_dirigente, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth]
+    );
+
+    res.json({ mensaje: 'Suscripción web registrada' });
+  } catch (err) {
+    console.error('❌ Error guardando suscripción web:', err);
+    res.status(500).json({ error: 'Error al guardar suscripción' });
+  }
+});
+
 /* Enviar notificación de recordatorio a todos los dirigentes */
 app.post('/notificacion/recordatorio-tribu', auth, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT DISTINCT token FROM push_tokens`);
-    const tokens = result.rows.map(r => r.token);
+    const [expoResult, webResult] = await Promise.all([
+      pool.query(`SELECT DISTINCT token FROM push_tokens`),
+      pool.query(`SELECT id, endpoint, p256dh, auth FROM web_push_subscriptions`),
+    ]);
 
-    if (tokens.length === 0) {
+    const expoTokens = expoResult.rows.map(r => r.token);
+    const webSubs = webResult.rows;
+
+    if (expoTokens.length === 0 && webSubs.length === 0) {
       return res.status(400).json({
         error: 'No hay dispositivos registrados para recibir notificaciones'
       });
     }
 
-    // Construir mensajes para Expo Push API (máx 100 por request)
-    const messages = tokens.map(token => ({
-      to: token,
-      sound: 'default',
-      title: '📋 Recordatorio de Asistencia',
-      body: 'RECUERDA TOMAR LA ASISTENCIA DE LA TRIBU',
-      data: { tipo: 'recordatorio_tribu' },
-    }));
-
-    // Enviar en lotes de 100 (límite de Expo)
-    const chunks = [];
-    for (let i = 0; i < messages.length; i += 100) {
-      chunks.push(messages.slice(i, i + 100));
-    }
-
     let enviados = 0;
     let errores = 0;
 
-    for (const chunk of chunks) {
-      try {
-        const response = await fetch('https://exp.host/--/api/v2/push/send', {
-          method: 'POST',
-          headers: {
-            'Accept': 'application/json',
-            'Accept-encoding': 'gzip, deflate',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(chunk),
-        });
+    /* ---- Móvil (Expo) ---- */
+    if (expoTokens.length > 0) {
+      // Construir mensajes para Expo Push API (máx 100 por request)
+      const messages = expoTokens.map(token => ({
+        to: token,
+        sound: 'default',
+        title: '📋 Recordatorio de Asistencia',
+        body: 'RECUERDA TOMAR LA ASISTENCIA DE LA TRIBU',
+        data: { tipo: 'recordatorio_tribu' },
+      }));
 
-        const data = await response.json();
-
-        if (data.data) {
-          data.data.forEach(ticket => {
-            if (ticket.status === 'ok') enviados++;
-            else errores++;
-          });
-        }
-      } catch (err) {
-        console.error('Error enviando chunk de notificaciones:', err);
-        errores += chunk.length;
+      // Enviar en lotes de 100 (límite de Expo)
+      const chunks = [];
+      for (let i = 0; i < messages.length; i += 100) {
+        chunks.push(messages.slice(i, i + 100));
       }
+
+      for (const chunk of chunks) {
+        try {
+          const response = await fetch('https://exp.host/--/api/v2/push/send', {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json',
+              'Accept-encoding': 'gzip, deflate',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(chunk),
+          });
+
+          const data = await response.json();
+
+          if (data.data) {
+            data.data.forEach(ticket => {
+              if (ticket.status === 'ok') enviados++;
+              else errores++;
+            });
+          }
+        } catch (err) {
+          console.error('Error enviando chunk de notificaciones Expo:', err);
+          errores += chunk.length;
+        }
+      }
+    }
+
+    /* ---- Web (navegador) ---- */
+    if (webSubs.length > 0) {
+      const payload = JSON.stringify({
+        title: '📋 Recordatorio de Asistencia',
+        body: 'RECUERDA TOMAR LA ASISTENCIA DE LA TRIBU',
+        data: { tipo: 'recordatorio_tribu' },
+      });
+
+      await Promise.all(webSubs.map(async (sub) => {
+        try {
+          await webpush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            payload
+          );
+          enviados++;
+        } catch (err) {
+          errores++;
+          // 404/410 = la suscripción ya no existe (usuario revocó el permiso, cambió de navegador, etc.)
+          if (err.statusCode === 404 || err.statusCode === 410) {
+            await pool.query('DELETE FROM web_push_subscriptions WHERE id = $1', [sub.id]);
+          } else {
+            console.error('Error enviando web push:', err.message);
+          }
+        }
+      }));
     }
 
     res.json({
       mensaje: 'Notificaciones enviadas',
       enviados,
       errores,
-      total_dispositivos: tokens.length,
+      total_dispositivos: expoTokens.length + webSubs.length,
     });
 
   } catch (err) {
@@ -1155,5 +1243,5 @@ app.post('/notificacion/recordatorio-tribu', auth, async (req, res) => {
 
 /* Railway */
 app.listen(PORT, '0.0.0.0', () => {
-  console.log('🔥 Servidor escuchando en puerto', PORT);
+  console.log(' Servidor escuchando en puerto', PORT);
 });
