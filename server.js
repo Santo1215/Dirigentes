@@ -1000,6 +1000,7 @@ app.get('/asistencia/exoditos/:fecha', auth, async (req, res) => {
         e.id_exodito,
         e.nombre,
         e.apellido,
+        e.cargo,
         ae.estado
       FROM exodito e
       JOIN tribu t ON t.id_tribu = e.id_tribu
@@ -1163,7 +1164,7 @@ app.post('/notificacion/recordatorio-tribu', auth, async (req, res) => {
       const messages = expoTokens.map(token => ({
         to: token,
         sound: 'default',
-        title: '📋 Recordatorio de Asistencia',
+        title: 'Recordatorio de Asistencia',
         body: 'RECUERDA TOMAR LA ASISTENCIA DE LA TRIBU',
         data: { tipo: 'recordatorio_tribu' },
       }));
@@ -1204,7 +1205,7 @@ app.post('/notificacion/recordatorio-tribu', auth, async (req, res) => {
     /* ---- Web (navegador) ---- */
     if (webSubs.length > 0) {
       const payload = JSON.stringify({
-        title: '📋 Recordatorio de Asistencia',
+        title: 'Recordatorio de Asistencia',
         body: 'RECUERDA TOMAR LA ASISTENCIA DE LA TRIBU',
         data: { tipo: 'recordatorio_tribu' },
       });
