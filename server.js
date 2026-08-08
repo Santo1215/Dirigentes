@@ -1249,33 +1249,12 @@ app.get('/asistencia/reporte-tribus', auth, async (req, res) => {
   try {
     const result = await pool.query(`
       WITH
-      -- Fechas distintas registradas en el período (para calcular posibles)
-      fechas_dir AS (
-        SELECT DISTINCT fecha FROM asistencia
-        WHERE fecha BETWEEN $1 AND $2
-      ),
+      -- 1. Fechas distintas registradas para exoditos en el período
       fechas_exo AS (
         SELECT DISTINCT fecha FROM asistencia_exodito
         WHERE fecha BETWEEN $1 AND $2
       ),
-      -- Presentes de dirigentes por tribu
-      presentes_dir AS (
-        SELECT d.id_tribu, COUNT(*) AS presentes
-        FROM asistencia a
-        JOIN dirigente d ON d.id_dirigente = a.id_dirigente
-        WHERE a.fecha BETWEEN $1 AND $2
-          AND d.id_tribu IS NOT NULL
-        GROUP BY d.id_tribu
-      ),
-      -- Total posible dirigentes: miembros_tribu × fechas_registradas_globalmente
-      posibles_dir AS (
-        SELECT d.id_tribu,
-               COUNT(DISTINCT d.id_dirigente) * (SELECT COUNT(*) FROM fechas_dir) AS posibles
-        FROM dirigente d
-        WHERE d.id_tribu IS NOT NULL
-        GROUP BY d.id_tribu
-      ),
-      -- Presentes de exoditos por tribu
+      -- 2. Presentes reales de exoditos por tribu
       presentes_exo AS (
         SELECT e.id_tribu, COUNT(*) AS presentes
         FROM asistencia_exodito ae
@@ -1284,7 +1263,7 @@ app.get('/asistencia/reporte-tribus', auth, async (req, res) => {
           AND e.id_tribu IS NOT NULL
         GROUP BY e.id_tribu
       ),
-      -- Total posible exoditos: miembros_tribu × fechas_registradas_globalmente
+      -- 3. Total posible de exoditos (miembros x días de asistencia)
       posibles_exo AS (
         SELECT e.id_tribu,
                COUNT(DISTINCT e.id_exodito) * (SELECT COUNT(*) FROM fechas_exo) AS posibles
@@ -1292,33 +1271,31 @@ app.get('/asistencia/reporte-tribus', auth, async (req, res) => {
         WHERE e.id_tribu IS NOT NULL
         GROUP BY e.id_tribu
       )
+      -- 4. Cálculo de porcentajes finales
       SELECT
         t.id_tribu,
         t.nombre,
         t.color_hex,
-        COALESCE(pd.presentes, 0) + COALESCE(pe.presentes, 0) AS total_presentes,
-        COALESCE(pod.posibles, 0) + COALESCE(poe.posibles, 0) AS total_posibles,
+        COALESCE(pe.presentes, 0) AS total_presentes,
+        COALESCE(poe.posibles, 0) AS total_posibles,
         CASE
-          WHEN COALESCE(pod.posibles, 0) + COALESCE(poe.posibles, 0) = 0 THEN 0
+          WHEN COALESCE(poe.posibles, 0) = 0 THEN 0
           ELSE ROUND(
-            (COALESCE(pd.presentes, 0) + COALESCE(pe.presentes, 0))::numeric /
-            (COALESCE(pod.posibles, 0) + COALESCE(poe.posibles, 0)) * 100,
+            COALESCE(pe.presentes, 0)::numeric / COALESCE(poe.posibles, 0) * 100,
             1
           )
         END AS porcentaje
       FROM tribu t
-      LEFT JOIN presentes_dir  pd  ON pd.id_tribu  = t.id_tribu
-      LEFT JOIN posibles_dir   pod ON pod.id_tribu = t.id_tribu
-      LEFT JOIN presentes_exo  pe  ON pe.id_tribu  = t.id_tribu
-      LEFT JOIN posibles_exo   poe ON poe.id_tribu = t.id_tribu
-      WHERE COALESCE(pod.posibles, 0) + COALESCE(poe.posibles, 0) > 0
+      LEFT JOIN presentes_exo pe ON pe.id_tribu = t.id_tribu
+      LEFT JOIN posibles_exo poe ON poe.id_tribu = t.id_tribu
+      WHERE COALESCE(poe.posibles, 0) > 0
       ORDER BY porcentaje DESC, total_presentes DESC
       LIMIT 5
     `, [desde, hasta]);
 
     res.json({ tribus: result.rows, desde, hasta });
   } catch (err) {
-    console.error('❌ Error en reporte-tribus:', err);
+    console.error('Error en reporte-tribus:', err);
     res.status(500).json({ error: 'Error al generar el reporte' });
   }
 });
