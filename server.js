@@ -1242,6 +1242,70 @@ app.post('/notificacion/recordatorio-tribu', auth, async (req, res) => {
   }
 });
 
+/* ===============================
+   Reporte Top 5 Tribus por asistencia
+=============================== */
+app.get('/asistencia/reporte-tribus', auth, async (req, res) => {
+  const { desde, hasta } = req.query;
+
+  if (!desde || !hasta) {
+    return res.status(400).json({ error: 'Se requieren los parámetros "desde" y "hasta"' });
+  }
+
+  try {
+    const result = await pool.query(`
+      WITH asistencia_dirigentes AS (
+        SELECT
+          d.id_tribu,
+          COUNT(*) FILTER (WHERE a.estado = 'Presente') AS presentes_dir,
+          COUNT(*) AS total_dir
+        FROM dirigente d
+        LEFT JOIN asistencia a
+          ON a.id_dirigente = d.id_dirigente
+          AND a.fecha BETWEEN $1 AND $2
+        WHERE d.id_tribu IS NOT NULL
+        GROUP BY d.id_tribu
+      ),
+      asistencia_exoditos AS (
+        SELECT
+          e.id_tribu,
+          COUNT(*) FILTER (WHERE ae.estado = 'Presente') AS presentes_exo,
+          COUNT(*) AS total_exo
+        FROM exodito e
+        LEFT JOIN asistencia_exodito ae
+          ON ae.id_exodito = e.id_exodito
+          AND ae.fecha BETWEEN $1 AND $2
+        WHERE e.id_tribu IS NOT NULL
+        GROUP BY e.id_tribu
+      )
+      SELECT
+        t.id_tribu,
+        t.nombre,
+        t.color_hex,
+        COALESCE(ad.presentes_dir, 0) + COALESCE(ae.presentes_exo, 0) AS total_presentes,
+        COALESCE(ad.total_dir, 0) + COALESCE(ae.total_exo, 0) AS total_posibles,
+        CASE
+          WHEN COALESCE(ad.total_dir, 0) + COALESCE(ae.total_exo, 0) = 0 THEN 0
+          ELSE ROUND(
+            (COALESCE(ad.presentes_dir, 0) + COALESCE(ae.presentes_exo, 0))::numeric /
+            (COALESCE(ad.total_dir, 0) + COALESCE(ae.total_exo, 0)) * 100,
+            1
+          )
+        END AS porcentaje
+      FROM tribu t
+      LEFT JOIN asistencia_dirigentes ad ON ad.id_tribu = t.id_tribu
+      LEFT JOIN asistencia_exoditos ae ON ae.id_tribu = t.id_tribu
+      ORDER BY porcentaje DESC, total_presentes DESC
+      LIMIT 5
+    `, [desde, hasta]);
+
+    res.json({ tribus: result.rows, desde, hasta });
+  } catch (err) {
+    console.error('❌ Error en reporte-tribus:', err);
+    res.status(500).json({ error: 'Error al generar el reporte' });
+  }
+});
+
 /* Railway */
 app.listen(PORT, '0.0.0.0', () => {
   console.log(' Servidor escuchando en puerto', PORT);
