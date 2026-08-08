@@ -518,6 +518,7 @@ app.get('/asistencia/exoditos', async (req, res) => {
 });
 
 // POST /asistencia/exoditos
+// Solo se almacenan registros de PRESENTES; ausente = sin registro.
 app.post('/asistencia/exoditos', auth, async (req, res) => {
   const { asistencias, fecha } = req.body;
 
@@ -525,24 +526,28 @@ app.post('/asistencia/exoditos', auth, async (req, res) => {
     return res.status(400).json({ error: 'No hay asistencias para registrar' });
   }
 
-  // Usar la fecha local enviada por el cliente (YYYY-MM-DD).
-  // Si no viene, usar CURRENT_DATE del servidor como fallback.
   const fechaRegistro = fecha && /^\d{4}-\d{2}-\d{2}$/.test(fecha)
     ? fecha
     : new Date().toISOString().slice(0, 10);
 
   try {
-    const queries = asistencias.map(({ id_exodito, estado }) =>
-      pool.query(
-        `
-        INSERT INTO asistencia_exodito (id_exodito, fecha, estado)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (id_exodito, fecha) DO UPDATE
-        SET estado = EXCLUDED.estado
-        `,
-        [id_exodito, fechaRegistro, estado]
-      )
-    );
+    const queries = asistencias.map(({ id_exodito, estado }) => {
+      if (estado === 'Presente') {
+        // Insertar o mantener el registro de presente
+        return pool.query(
+          `INSERT INTO asistencia_exodito (id_exodito, fecha, estado)
+           VALUES ($1, $2, 'Presente')
+           ON CONFLICT (id_exodito, fecha) DO UPDATE SET estado = 'Presente'`,
+          [id_exodito, fechaRegistro]
+        );
+      } else {
+        // Ausente = eliminar el registro si existía
+        return pool.query(
+          `DELETE FROM asistencia_exodito WHERE id_exodito = $1 AND fecha = $2`,
+          [id_exodito, fechaRegistro]
+        );
+      }
+    });
 
     await Promise.all(queries);
 
@@ -718,6 +723,8 @@ app.get('/asistencia/fecha/:fecha', auth, async (req, res) => {
     res.status(500).json({ error: 'Error al obtener asistencia' });
   }
 });
+// PUT /asistencia (dirigentes)
+// Solo se almacenan registros de PRESENTES; ausente = sin registro.
 app.put('/asistencia', auth, async (req, res) => {
   const { id_dirigente, fecha, estado } = req.body;
 
@@ -726,33 +733,20 @@ app.put('/asistencia', auth, async (req, res) => {
   }
 
   try {
-    const existe = await pool.query(
-      `
-      SELECT id_asistencia FROM asistencia
-      WHERE id_dirigente = $1 AND fecha = $2
-      `,
-      [id_dirigente, fecha]
-    );
-
-    if (existe.rows.length > 0) {
-      // 🔁 Update
+    if (estado === 'Presente') {
+      // Insertar o actualizar a Presente
       await pool.query(
-        `
-        UPDATE asistencia
-        SET estado = $1
-        WHERE id_dirigente = $2 AND fecha = $3
-        `,
-        [estado, id_dirigente, fecha]
+        `INSERT INTO asistencia
+         (id_dirigente, fecha, hora_llegada, estado, metodo_registro)
+         VALUES ($1, $2, (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::time, 'Presente', 'Manual')
+         ON CONFLICT (id_dirigente, fecha) DO UPDATE SET estado = 'Presente'`,
+        [id_dirigente, fecha]
       );
     } else {
-      // ➕ Insert
+      // Ausente = eliminar el registro si existía
       await pool.query(
-        `
-        INSERT INTO asistencia
-        (id_dirigente, fecha, hora_llegada, estado, metodo_registro)
-        VALUES ($1, $2, (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::time, $3, 'Manual')
-        `,
-        [id_dirigente, fecha, estado]
+        `DELETE FROM asistencia WHERE id_dirigente = $1 AND fecha = $2`,
+        [id_dirigente, fecha]
       );
     }
 
@@ -1254,27 +1248,47 @@ app.get('/asistencia/reporte-tribus', auth, async (req, res) => {
 
   try {
     const result = await pool.query(`
-      WITH asistencia_dirigentes AS (
-        SELECT
-          d.id_tribu,
-          COUNT(*) FILTER (WHERE a.estado = 'Presente') AS presentes_dir,
-          COUNT(*) AS total_dir
+      WITH
+      -- Fechas distintas registradas en el período (para calcular posibles)
+      fechas_dir AS (
+        SELECT DISTINCT fecha FROM asistencia
+        WHERE fecha BETWEEN $1 AND $2
+      ),
+      fechas_exo AS (
+        SELECT DISTINCT fecha FROM asistencia_exodito
+        WHERE fecha BETWEEN $1 AND $2
+      ),
+      -- Presentes de dirigentes por tribu
+      presentes_dir AS (
+        SELECT d.id_tribu, COUNT(*) AS presentes
+        FROM asistencia a
+        JOIN dirigente d ON d.id_dirigente = a.id_dirigente
+        WHERE a.fecha BETWEEN $1 AND $2
+          AND d.id_tribu IS NOT NULL
+        GROUP BY d.id_tribu
+      ),
+      -- Total posible dirigentes: miembros_tribu × fechas_registradas_globalmente
+      posibles_dir AS (
+        SELECT d.id_tribu,
+               COUNT(DISTINCT d.id_dirigente) * (SELECT COUNT(*) FROM fechas_dir) AS posibles
         FROM dirigente d
-        LEFT JOIN asistencia a
-          ON a.id_dirigente = d.id_dirigente
-          AND a.fecha BETWEEN $1 AND $2
         WHERE d.id_tribu IS NOT NULL
         GROUP BY d.id_tribu
       ),
-      asistencia_exoditos AS (
-        SELECT
-          e.id_tribu,
-          COUNT(*) FILTER (WHERE ae.estado = 'Presente') AS presentes_exo,
-          COUNT(*) AS total_exo
+      -- Presentes de exoditos por tribu
+      presentes_exo AS (
+        SELECT e.id_tribu, COUNT(*) AS presentes
+        FROM asistencia_exodito ae
+        JOIN exodito e ON e.id_exodito = ae.id_exodito
+        WHERE ae.fecha BETWEEN $1 AND $2
+          AND e.id_tribu IS NOT NULL
+        GROUP BY e.id_tribu
+      ),
+      -- Total posible exoditos: miembros_tribu × fechas_registradas_globalmente
+      posibles_exo AS (
+        SELECT e.id_tribu,
+               COUNT(DISTINCT e.id_exodito) * (SELECT COUNT(*) FROM fechas_exo) AS posibles
         FROM exodito e
-        LEFT JOIN asistencia_exodito ae
-          ON ae.id_exodito = e.id_exodito
-          AND ae.fecha BETWEEN $1 AND $2
         WHERE e.id_tribu IS NOT NULL
         GROUP BY e.id_tribu
       )
@@ -1282,19 +1296,22 @@ app.get('/asistencia/reporte-tribus', auth, async (req, res) => {
         t.id_tribu,
         t.nombre,
         t.color_hex,
-        COALESCE(ad.presentes_dir, 0) + COALESCE(ae.presentes_exo, 0) AS total_presentes,
-        COALESCE(ad.total_dir, 0) + COALESCE(ae.total_exo, 0) AS total_posibles,
+        COALESCE(pd.presentes, 0) + COALESCE(pe.presentes, 0) AS total_presentes,
+        COALESCE(pod.posibles, 0) + COALESCE(poe.posibles, 0) AS total_posibles,
         CASE
-          WHEN COALESCE(ad.total_dir, 0) + COALESCE(ae.total_exo, 0) = 0 THEN 0
+          WHEN COALESCE(pod.posibles, 0) + COALESCE(poe.posibles, 0) = 0 THEN 0
           ELSE ROUND(
-            (COALESCE(ad.presentes_dir, 0) + COALESCE(ae.presentes_exo, 0))::numeric /
-            (COALESCE(ad.total_dir, 0) + COALESCE(ae.total_exo, 0)) * 100,
+            (COALESCE(pd.presentes, 0) + COALESCE(pe.presentes, 0))::numeric /
+            (COALESCE(pod.posibles, 0) + COALESCE(poe.posibles, 0)) * 100,
             1
           )
         END AS porcentaje
       FROM tribu t
-      LEFT JOIN asistencia_dirigentes ad ON ad.id_tribu = t.id_tribu
-      LEFT JOIN asistencia_exoditos ae ON ae.id_tribu = t.id_tribu
+      LEFT JOIN presentes_dir  pd  ON pd.id_tribu  = t.id_tribu
+      LEFT JOIN posibles_dir   pod ON pod.id_tribu = t.id_tribu
+      LEFT JOIN presentes_exo  pe  ON pe.id_tribu  = t.id_tribu
+      LEFT JOIN posibles_exo   poe ON poe.id_tribu = t.id_tribu
+      WHERE COALESCE(pod.posibles, 0) + COALESCE(poe.posibles, 0) > 0
       ORDER BY porcentaje DESC, total_presentes DESC
       LIMIT 5
     `, [desde, hasta]);
