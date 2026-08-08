@@ -1007,7 +1007,7 @@ app.get('/asistencia/exoditos/:fecha', auth, async (req, res) => {
       LEFT JOIN asistencia_exodito ae
         ON ae.id_exodito = e.id_exodito
         AND ae.fecha = $1
-      ORDER BY t.nombre, e.nombre
+      ORDER BY t.id_tribu ASC, e.nombre ASC
     `, [fecha]);
 
     res.json(result.rows);
