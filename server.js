@@ -1304,16 +1304,13 @@ app.get('/asistencia/reporte-tribus', auth, async (req, res) => {
    Endpoints de Actividades
 =============================== */
 
-// Obtener todas las actividades
 app.get('/actividades', async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT id_actividad, titulo, descripcion, TO_CHAR(fecha, \'YYYY-MM-DD\') as fecha, responsable, tipo FROM actividades ORDER BY fecha ASC'
-    );
-    res.json(result.rows);
+    const result = await pool.query('SELECT * FROM actividades ORDER BY fecha ASC');
+    res.json(result.rows); 
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Error al obtener actividades' });
+    res.status(500).json({ error: 'Error al obtener las actividades' });
   }
 });
 
