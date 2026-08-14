@@ -1300,6 +1300,50 @@ app.get('/asistencia/reporte-tribus', auth, async (req, res) => {
   }
 });
 
+/* ===============================
+   Endpoints de Actividades
+=============================== */
+
+// Obtener todas las actividades
+app.get('/actividades', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT id_actividad, titulo, descripcion, TO_CHAR(fecha, \'YYYY-MM-DD\') as fecha, responsable, tipo FROM actividades ORDER BY fecha ASC'
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al obtener actividades' });
+  }
+});
+
+// Crear una nueva actividad
+
+app.post('/actividades', async (req, res) => {
+  const { titulo, descripcion, fecha, responsable, tipo } = req.body;
+
+  if (!titulo || !fecha) {
+    return res.status(400).json({ error: 'Faltan datos obligatorios: titulo y fecha' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO actividades (titulo, descripcion, fecha, responsable, tipo)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
+      [titulo, descripcion || null, fecha, responsable || null, tipo || 'Otro']
+    );
+
+    res.status(201).json({
+      mensaje: 'Actividad creada correctamente',
+      actividad: result.rows[0]
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al registrar la actividad' });
+  }
+});
+
 /* Railway */
 app.listen(PORT, '0.0.0.0', () => {
   console.log(' Servidor escuchando en puerto', PORT);
