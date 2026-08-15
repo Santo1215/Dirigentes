@@ -1341,6 +1341,112 @@ app.post('/actividades', async (req, res) => {
   }
 });
 
+/* ==========================================
+   ENDPOINTS DE MATERIALES (INVENTARIO)
+========================================== */
+
+// Obtener la lista completa de materiales
+app.get('/materiales', async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        m.id_material,
+        m.nombre_material,
+        m.cantidad,
+        m.id_dirigente,
+        CONCAT(d.nombre, ' ', d.apellido) AS responsable
+      FROM materiales m
+      LEFT JOIN dirigentes d ON m.id_dirigente = d.id_dirigente
+      ORDER BY m.nombre_material ASC
+    `;
+    const result = await db.query(query);
+    res.json(result.rows || result);
+  } catch (error) {
+    console.error('Error al consultar materiales:', error);
+    res.status(500).json({ error: 'Error al obtener el inventario de materiales' });
+  }
+});
+
+// Registrar un nuevo material
+app.post('/materiales', async (req, res) => {
+  const { nombre_material, cantidad, id_dirigente } = req.body;
+
+  if (!nombre_material || cantidad === undefined) {
+    return res.status(400).json({ error: 'El nombre del material y la cantidad son obligatorios' });
+  }
+
+  try {
+    const query = `
+      INSERT INTO materiales (nombre_material, cantidad, id_dirigente)
+      VALUES ($1, $2, $3)
+      RETURNING *
+    `;
+    const values = [nombre_material, cantidad, id_dirigente || null];
+    
+    const result = await db.query(query, values);
+    const nuevoMaterial = result.rows ? result.rows[0] : result[0];
+
+    res.status(201).json({
+      mensaje: 'Material registrado exitosamente',
+      material: nuevoMaterial
+    });
+  } catch (error) {
+    console.error('Error al insertar material:', error);
+    res.status(500).json({ error: 'Error al guardar el material' });
+  }
+});
+
+// Actualizar la cantidad o datos de un material
+app.put('/materiales/:id', async (req, res) => {
+  const { id } = req.params;
+  const { nombre_material, cantidad, id_dirigente } = req.body;
+
+  try {
+    const query = `
+      UPDATE materiales
+      SET nombre_material = COALESCE($1, nombre_material),
+          cantidad = COALESCE($2, cantidad),
+          id_dirigente = COALESCE($3, id_dirigente)
+      WHERE id_material = $4
+      RETURNING *
+    `;
+    const values = [nombre_material, cantidad, id_dirigente, id];
+    const result = await db.query(query, values);
+    const materialActualizado = result.rows ? result.rows[0] : result[0];
+
+    if (!materialActualizado) {
+      return res.status(404).json({ error: 'Material no encontrado' });
+    }
+
+    res.json({
+      mensaje: 'Material actualizado correctamente',
+      material: materialActualizado
+    });
+  } catch (error) {
+    console.error('Error al actualizar material:', error);
+    res.status(500).json({ error: 'Error al actualizar el material' });
+  }
+});
+
+// 4. Eliminar un material
+app.delete('/materiales/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await db.query('DELETE FROM materiales WHERE id_material = $1 RETURNING *', [id]);
+    const eliminado = result.rows ? result.rows[0] : result[0];
+
+    if (!eliminado) {
+      return res.status(404).json({ error: 'Material no encontrado' });
+    }
+
+    res.json({ mensaje: 'Material eliminado del inventario' });
+  } catch (error) {
+    console.error('Error al eliminar material:', error);
+    res.status(500).json({ error: 'Error al eliminar el material' });
+  }
+});
+
 /* Railway */
 app.listen(PORT, '0.0.0.0', () => {
   console.log(' Servidor escuchando en puerto', PORT);
