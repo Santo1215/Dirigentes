@@ -1356,7 +1356,7 @@ app.get('/materiales', async (req, res) => {
         m.id_dirigente,
         CONCAT(d.nombre, ' ', d.apellido) AS responsable
       FROM materiales m
-      LEFT JOIN dirigentes d ON m.id_dirigente = d.id_dirigente
+      LEFT JOIN dirigente d ON m.id_dirigente = d.id_dirigente
       ORDER BY m.nombre_material ASC
     `;
     const result = await db.query(query);
