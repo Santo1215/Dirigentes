@@ -1359,8 +1359,8 @@ app.get('/materiales', async (req, res) => {
       LEFT JOIN dirigente d ON m.id_dirigente = d.id_dirigente
       ORDER BY m.nombre_material ASC
     `;
-    const result = await db.query(query);
-    res.json(result.rows || result);
+    const result = await pool.query(query);
+    res.json(result.rows);
   } catch (error) {
     console.error('Error al consultar materiales:', error);
     res.status(500).json({ error: 'Error al obtener el inventario de materiales' });
@@ -1371,9 +1371,12 @@ app.get('/materiales', async (req, res) => {
 app.post('/materiales', async (req, res) => {
   const { nombre_material, cantidad, id_dirigente } = req.body;
 
-  if (!nombre_material || cantidad === undefined) {
-    return res.status(400).json({ error: 'El nombre del material y la cantidad son obligatorios' });
+  if (!nombre_material || cantidad === undefined || isNaN(parseInt(cantidad))) {
+    return res.status(400).json({ error: 'El nombre del material y una cantidad válida son obligatorios' });
   }
+
+  // Sanitizar id_dirigente en caso de que venga vacío
+  const dirigenteId = (id_dirigente && !isNaN(parseInt(id_dirigente))) ? parseInt(id_dirigente) : null;
 
   try {
     const query = `
@@ -1381,14 +1384,13 @@ app.post('/materiales', async (req, res) => {
       VALUES ($1, $2, $3)
       RETURNING *
     `;
-    const values = [nombre_material, cantidad, id_dirigente || null];
+    const values = [nombre_material.trim(), parseInt(cantidad), dirigenteId];
     
-    const result = await db.query(query, values);
-    const nuevoMaterial = result.rows ? result.rows[0] : result[0];
+    const result = await pool.query(query, values);
 
     res.status(201).json({
       mensaje: 'Material registrado exitosamente',
-      material: nuevoMaterial
+      material: result.rows[0]
     });
   } catch (error) {
     console.error('Error al insertar material:', error);
@@ -1402,6 +1404,8 @@ app.put('/materiales/:id', async (req, res) => {
   const { nombre_material, cantidad, id_dirigente } = req.body;
 
   try {
+    const dirigenteId = (id_dirigente && !isNaN(parseInt(id_dirigente))) ? parseInt(id_dirigente) : null;
+
     const query = `
       UPDATE materiales
       SET nombre_material = COALESCE($1, nombre_material),
@@ -1410,17 +1414,22 @@ app.put('/materiales/:id', async (req, res) => {
       WHERE id_material = $4
       RETURNING *
     `;
-    const values = [nombre_material, cantidad, id_dirigente, id];
-    const result = await db.query(query, values);
-    const materialActualizado = result.rows ? result.rows[0] : result[0];
+    const values = [
+      nombre_material ? nombre_material.trim() : null,
+      cantidad !== undefined && !isNaN(parseInt(cantidad)) ? parseInt(cantidad) : null,
+      dirigenteId,
+      id
+    ];
+    
+    const result = await pool.query(query, values);
 
-    if (!materialActualizado) {
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Material no encontrado' });
     }
 
     res.json({
       mensaje: 'Material actualizado correctamente',
-      material: materialActualizado
+      material: result.rows[0]
     });
   } catch (error) {
     console.error('Error al actualizar material:', error);
@@ -1428,15 +1437,14 @@ app.put('/materiales/:id', async (req, res) => {
   }
 });
 
-// 4. Eliminar un material
+// Eliminar un material
 app.delete('/materiales/:id', async (req, res) => {
   const { id } = req.params;
 
   try {
-    const result = await db.query('DELETE FROM materiales WHERE id_material = $1 RETURNING *', [id]);
-    const eliminado = result.rows ? result.rows[0] : result[0];
+    const result = await pool.query('DELETE FROM materiales WHERE id_material = $1 RETURNING *', [id]);
 
-    if (!eliminado) {
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Material no encontrado' });
     }
 
