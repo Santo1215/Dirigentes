@@ -1455,6 +1455,51 @@ app.delete('/materiales/:id', async (req, res) => {
   }
 });
 
+// POST: Guardar o actualizar asistencia
+app.post('/actividades/:id/confirmar', async (req, res) => {
+  const { id } = req.params;
+  // Ahora recibimos el estado desde el frontend
+  const { id_dirigente, estado } = req.body; 
+
+  try {
+    // Comando UPSERT en PostgreSQL:
+    // Si la combinación (id_actividad, id_dirigente) no existe, hace INSERT.
+    // Si ya existe (ON CONFLICT), hace UPDATE del estado.
+    const query = `
+      INSERT INTO asistencia (id_actividad, id_dirigente, estado)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (id_actividad, id_dirigente) 
+      DO UPDATE SET estado = EXCLUDED.estado;
+    `;
+    
+    await pool.query(query, [id, id_dirigente, estado]);
+    res.json({ message: 'Asistencia registrada correctamente' });
+  } catch (error) {
+    console.error('Error guardando asistencia:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// GET: Obtener asistentes de una actividad
+app.get('/actividades/:id/asistentes', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const query = `
+      SELECT d.id_dirigente, d.nombre, d.apellido, a.estado
+      FROM asistencia a
+      JOIN dirigente d ON a.id_dirigente = d.id_dirigente
+      WHERE a.id_actividad = $1
+    `;
+    const result = await pool.query(query, [id]);
+    res.json(result.rows); // Retorna los dirigentes y si su estado es 'si' o 'no'
+  } catch (error) {
+    console.error('Error obteniendo asistentes:', error);
+    res.status(500).json({ error: 'Error al obtener asistentes' });
+  }
+});
+
+
+
 /* Railway */
 app.listen(PORT, '0.0.0.0', () => {
   console.log(' Servidor escuchando en puerto', PORT);
