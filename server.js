@@ -1263,7 +1263,7 @@ app.post('/actividades/:id/confirmar', async (req, res) => {
 
   try {
     const query = `
-      INSERT INTO asistencia (id_actividad, id_dirigente, estado)
+      INSERT INTO asistencia_actividades (id_actividad, id_dirigente, estado)
       VALUES ($1, $2, $3)
       ON CONFLICT (id_actividad, id_dirigente) 
       DO UPDATE SET estado = EXCLUDED.estado;
@@ -1281,10 +1281,10 @@ app.get('/actividades/:id/asistentes', async (req, res) => {
   const { id } = req.params;
   try {
     const query = `
-      SELECT d.id_dirigente, d.nombre, d.apellido, a.estado
-      FROM asistencia a
-      JOIN dirigente d ON a.id_dirigente = d.id_dirigente
-      WHERE a.id_actividad = $1
+      SELECT d.id_dirigente, d.nombre, d.apellido, aa.estado
+      FROM asistencia_actividades aa
+      JOIN dirigente d ON aa.id_dirigente = d.id_dirigente
+      WHERE aa.id_actividad = $1
     `;
     const result = await pool.query(query, [id]);
     res.json(result.rows);
