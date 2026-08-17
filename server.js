@@ -11,6 +11,7 @@ import pool from './db.js';
 import auth from './auth.js';
 
 webpush.setVapidDetails(
+  process.env.VAPID_SUBJECT || 'mailto:cambia-esto@tu-dominio.com',
   process.env.VAPID_PUBLIC_KEY,
   process.env.VAPID_PRIVATE_KEY
 );
@@ -1211,4 +1212,89 @@ app.put('/materiales/:id', async (req, res) => {
     const query = `
       UPDATE materiales
       SET nombre_material = COALESCE($1, nombre_material),
-          cantidad = COALES
+          cantidad = COALESCE($2, cantidad),
+          id_dirigente = COALESCE($3, id_dirigente)
+      WHERE id_material = $4
+      RETURNING *
+    `;
+    const values = [
+      nombre_material ? nombre_material.trim() : null,
+      cantidad !== undefined && !isNaN(parseInt(cantidad)) ? parseInt(cantidad) : null,
+      dirigenteId,
+      id
+    ];
+    
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Material no encontrado' });
+    }
+
+    res.json({
+      mensaje: 'Material actualizado correctamente',
+      material: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Error al actualizar material:', error);
+    res.status(500).json({ error: 'Error al actualizar el material' });
+  }
+});
+
+app.delete('/materiales/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query('DELETE FROM materiales WHERE id_material = $1 RETURNING *', [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Material no encontrado' });
+    }
+
+    res.json({ mensaje: 'Material eliminado del inventario' });
+  } catch (error) {
+    console.error('Error al eliminar material:', error);
+    res.status(500).json({ error: 'Error al eliminar el material' });
+  }
+});
+
+app.post('/actividades/:id/confirmar', async (req, res) => {
+  const { id } = req.params;
+  const { id_dirigente, estado } = req.body; 
+
+  try {
+    const query = `
+      INSERT INTO asistencia (id_actividad, id_dirigente, estado)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (id_actividad, id_dirigente) 
+      DO UPDATE SET estado = EXCLUDED.estado;
+    `;
+    
+    await pool.query(query, [id, id_dirigente, estado]);
+    res.json({ message: 'Asistencia registrada correctamente' });
+  } catch (error) {
+    console.error('Error guardando asistencia:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.get('/actividades/:id/asistentes', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const query = `
+      SELECT d.id_dirigente, d.nombre, d.apellido, a.estado
+      FROM asistencia a
+      JOIN dirigente d ON a.id_dirigente = d.id_dirigente
+      WHERE a.id_actividad = $1
+    `;
+    const result = await pool.query(query, [id]);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error obteniendo asistentes:', error);
+    res.status(500).json({ error: 'Error al obtener asistentes' });
+  }
+});
+
+/* Railway */
+app.listen(PORT, '0.0.0.0', () => {
+  console.log('Servidor escuchando en puerto', PORT);
+});
