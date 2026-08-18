@@ -599,7 +599,7 @@ app.get('/asistencia/fecha/:fecha', auth, async (req, res) => {
     const result = await pool.query(
       `
       SELECT 
-        d.id_dirigente, d.nombre, d.apellido, d.rol, d.foto
+        d.id_dirigente, d.nombre, d.apellido, d.rol, d.foto,
         a.id_asistencia, a.estado, a.metodo_registro, a.hora_llegada
       FROM dirigente d
       LEFT JOIN asistencia a
