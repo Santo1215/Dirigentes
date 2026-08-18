@@ -1157,7 +1157,11 @@ app.get('/materiales', async (req, res) => {
       SELECT 
         m.id_material, m.nombre_material, m.cantidad, m.id_dirigente,
         CONCAT(d.nombre, ' ', d.apellido) AS responsable,
-        d.foto
+        CASE 
+          WHEN d.foto IS NOT NULL AND d.foto != '' 
+          THEN CONCAT('${req.protocol}://${req.get('host')}/uploads/', d.foto)
+          ELSE NULL 
+        END AS foto
       FROM materiales m
       LEFT JOIN dirigente d ON m.id_dirigente = d.id_dirigente
       ORDER BY m.nombre_material ASC
