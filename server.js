@@ -651,16 +651,11 @@ app.put('/asistencia', auth, async (req, res) => {
 app.get('/multas', auth, async (req, res) => {
   try {
     const result = await pool.query(
-      `
-      SELECT 
-        m.id_multa, m.fecha, m.monto, m.motivo, m.detalle, m.id_dirigente,
-        d.nombre, d.apellido
-      FROM multa m
-      JOIN dirigente d ON m.id_dirigente = d.id_dirigente
-      ORDER BY m.fecha DESC
-      `
+      ` SELECT m.id_multa, m.fecha, m.monto, m.motivo, m.detalle, m.id_dirigente, d.nombre, d.apellido, d.comite 
+        FROM multa m 
+        JOIN dirigente d ON m.id_dirigente = d.id_dirigente 
+        ORDER BY m.fecha DESC `
     );
-
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: 'Error al obtener multas' });
