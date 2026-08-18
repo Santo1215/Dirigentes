@@ -11,7 +11,6 @@ import pool from './db.js';
 import auth from './auth.js';
 
 webpush.setVapidDetails(
-  process.env.VAPID_SUBJECT || 'mailto:cambia-esto@tu-dominio.com',
   process.env.VAPID_PUBLIC_KEY,
   process.env.VAPID_PRIVATE_KEY
 );
@@ -599,7 +598,7 @@ app.get('/asistencia/fecha/:fecha', auth, async (req, res) => {
     const result = await pool.query(
       `
       SELECT 
-        d.id_dirigente, d.nombre, d.apellido, d.rol,
+        d.id_dirigente, d.nombre, d.apellido, d.rol, d.foto
         a.id_asistencia, a.estado, a.metodo_registro, a.hora_llegada
       FROM dirigente d
       LEFT JOIN asistencia a
@@ -1276,7 +1275,7 @@ app.get('/actividades/:id/asistentes', async (req, res) => {
   const { id } = req.params;
   try {
     const query = `
-      SELECT d.id_dirigente, d.nombre, d.apellido, aa.estado
+      SELECT d.id_dirigente, d.nombre, d.apellido, d.foto, aa.estado
       FROM asistencia_actividad aa
       JOIN dirigente d ON aa.id_dirigente = d.id_dirigente
       WHERE aa.id_actividad = $1
