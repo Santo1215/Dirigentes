@@ -11,7 +11,7 @@ import pool from './db.js';
 import auth from './auth.js';
 
 webpush.setVapidDetails(
-  'exodojpll29@gmail.com',
+  'mailto:[exodojpll29@gmail.com]',
   process.env.VAPID_PUBLIC_KEY,
   process.env.VAPID_PRIVATE_KEY
 );
