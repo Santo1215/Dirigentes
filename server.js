@@ -1293,6 +1293,71 @@ app.get('/actividades/:id/asistentes', async (req, res) => {
     res.status(500).json({ error: 'Error al obtener asistentes' });
   }
 });
+/* ENDPOINTS DE ASAMBLEAS */
+
+app.get('/asambleas', async (req, res) => {
+  try {
+    const query = `
+      SELECT a.*, 
+             c.nombre AS encargado_nombre, c.apellido AS encargado_apellido,
+             p.nombre AS pitar_nombre, p.apellido AS pitar_apellido, p.foto AS pitar_foto,
+             t.nombre AS tiempo_nombre, t.apellido AS tiempo_apellido, t.foto AS tiempo_foto
+      FROM asamblea a
+      LEFT JOIN dirigente c ON a.id_encargado = c.id_dirigente
+      LEFT JOIN dirigente p ON a.id_encargado_pitar = p.id_dirigente
+      LEFT JOIN dirigente t ON a.id_encargado_tiempo = t.id_dirigente
+      ORDER BY a.fecha ASC
+    `;
+    const result = await pool.query(query);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al obtener asambleas' });
+  }
+});
+
+app.post('/asambleas', async (req, res) => {
+  const { titulo, id_encargado, id_encargado_pitar, id_encargado_tiempo, otros_encargados, materiales, fecha, descripcion } = req.body;
+  try {
+    const result = await pool.query(
+      `INSERT INTO asamblea (titulo, id_encargado, id_encargado_pitar, id_encargado_tiempo, otros_encargados, materiales, fecha, descripcion)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [titulo, id_encargado, id_encargado_pitar || null, id_encargado_tiempo || null, JSON.stringify(otros_encargados || []), materiales, fecha, descripcion]
+    );
+    res.status(201).json({ mensaje: 'Asamblea creada', asamblea: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al crear asamblea' });
+  }
+});
+
+app.put('/asambleas/:id', async (req, res) => {
+  const { id } = req.params;
+  const { titulo, id_encargado_pitar, id_encargado_tiempo, otros_encargados, materiales, fecha, descripcion } = req.body;
+  try {
+    const result = await pool.query(
+      `UPDATE asamblea
+       SET titulo = $1, id_encargado_pitar = $2, id_encargado_tiempo = $3, otros_encargados = $4, materiales = $5, fecha = $6, descripcion = $7
+       WHERE id_asamblea = $8 RETURNING *`,
+      [titulo, id_encargado_pitar || null, id_encargado_tiempo || null, JSON.stringify(otros_encargados || []), materiales, fecha, descripcion, id]
+    );
+    res.json({ mensaje: 'Asamblea actualizada', asamblea: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al actualizar asamblea' });
+  }
+});
+
+app.delete('/asambleas/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.query('DELETE FROM asamblea WHERE id_asamblea = $1', [id]);
+    res.json({ mensaje: 'Asamblea eliminada' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar asamblea' });
+  }
+});
 
 /* Railway */
 app.listen(PORT, '0.0.0.0', () => {
