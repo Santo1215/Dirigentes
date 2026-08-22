@@ -1359,6 +1359,107 @@ app.delete('/asambleas/:id', async (req, res) => {
   }
 });
 
+/* ── ENDPOINTS DE CALIFICACIONES DE ASAMBLEAS ── */
+
+/* GET /asambleas/:id/calificaciones
+   Devuelve todas las calificaciones de la asamblea + promedio */
+app.get('/asambleas/:id/calificaciones', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT
+         ca.id_calificacion,
+         ca.estrellas,
+         ca.resena,
+         ca.fecha_registro,
+         d.id_dirigente,
+         d.nombre,
+         d.apellido,
+         d.foto
+       FROM calificacion_asamblea ca
+       JOIN dirigente d ON ca.id_dirigente = d.id_dirigente
+       WHERE ca.id_asamblea = $1
+       ORDER BY ca.fecha_registro DESC`,
+      [id]
+    );
+
+    const promedio = result.rows.length
+      ? (result.rows.reduce((acc, r) => acc + Number(r.estrellas), 0) / result.rows.length).toFixed(1)
+      : null;
+
+    res.json({ calificaciones: result.rows, promedio, total: result.rows.length });
+  } catch (err) {
+    console.error('Error obteniendo calificaciones:', err);
+    res.status(500).json({ error: 'Error al obtener calificaciones' });
+  }
+});
+
+/* GET /asambleas/:id/mi-calificacion?id_dirigente=X
+   Devuelve la calificación del dirigente para esa asamblea (si existe) */
+app.get('/asambleas/:id/mi-calificacion', async (req, res) => {
+  const { id } = req.params;
+  const { id_dirigente } = req.query;
+
+  if (!id_dirigente) {
+    return res.status(400).json({ error: 'Se requiere id_dirigente como query param' });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT * FROM calificacion_asamblea
+       WHERE id_asamblea = $1 AND id_dirigente = $2`,
+      [id, id_dirigente]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json({ calificacion: null });
+    }
+
+    res.json({ calificacion: result.rows[0] });
+  } catch (err) {
+    console.error('Error obteniendo mi calificación:', err);
+    res.status(500).json({ error: 'Error al buscar calificación' });
+  }
+});
+
+/* POST /asambleas/:id/calificaciones
+   Crea una calificación. 409 si el dirigente ya calificó esa asamblea. */
+app.post('/asambleas/:id/calificaciones', async (req, res) => {
+  const { id } = req.params;
+  const { id_dirigente, estrellas, resena } = req.body;
+
+  if (!id_dirigente) {
+    return res.status(400).json({ error: 'id_dirigente es obligatorio' });
+  }
+  if (!estrellas || estrellas < 1 || estrellas > 5) {
+    return res.status(400).json({ error: 'Las estrellas deben ser un valor entre 1 y 5' });
+  }
+  if (!resena || !resena.trim()) {
+    return res.status(400).json({ error: 'La reseña es obligatoria' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO calificacion_asamblea (id_asamblea, id_dirigente, estrellas, resena)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [id, id_dirigente, estrellas, resena.trim()]
+    );
+
+    res.status(201).json({
+      mensaje: 'Calificación registrada correctamente',
+      calificacion: result.rows[0]
+    });
+  } catch (err) {
+    if (err.code === '23505') {
+      // Violación de UNIQUE (id_asamblea, id_dirigente)
+      return res.status(409).json({ error: 'Ya calificaste esta asamblea anteriormente' });
+    }
+    console.error('Error guardando calificación:', err);
+    res.status(500).json({ error: 'Error al guardar la calificación' });
+  }
+});
+
 /* Railway */
 app.listen(PORT, '0.0.0.0', () => {
   console.log('Servidor escuchando en puerto', PORT);
