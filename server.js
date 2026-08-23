@@ -1301,11 +1301,15 @@ app.get('/asambleas', async (req, res) => {
       SELECT a.*, 
              c.nombre AS encargado_nombre, c.apellido AS encargado_apellido,
              p.nombre AS pitar_nombre, p.apellido AS pitar_apellido, p.foto AS pitar_foto,
-             t.nombre AS tiempo_nombre, t.apellido AS tiempo_apellido, t.foto AS tiempo_foto
+             t.nombre AS tiempo_nombre, t.apellido AS tiempo_apellido, t.foto AS tiempo_foto,
+             COALESCE(AVG(ca.estrellas), 0) AS promedio_estrellas,
+             COUNT(ca.id_calificacion) AS total_calificaciones
       FROM asamblea a
       LEFT JOIN dirigente c ON a.id_encargado = c.id_dirigente
       LEFT JOIN dirigente p ON a.id_encargado_pitar = p.id_dirigente
       LEFT JOIN dirigente t ON a.id_encargado_tiempo = t.id_dirigente
+      LEFT JOIN calificacion_asamblea ca ON a.id_asamblea = ca.id_asamblea
+      GROUP BY a.id_asamblea, c.id_dirigente, p.id_dirigente, t.id_dirigente
       ORDER BY a.fecha ASC
     `;
     const result = await pool.query(query);
@@ -1431,8 +1435,8 @@ app.post('/asambleas/:id/calificaciones', async (req, res) => {
   if (!id_dirigente) {
     return res.status(400).json({ error: 'id_dirigente es obligatorio' });
   }
-  if (!estrellas || estrellas < 1 || estrellas > 5) {
-    return res.status(400).json({ error: 'Las estrellas deben ser un valor entre 1 y 5' });
+  if (!estrellas || estrellas < 0 || estrellas > 5) {
+    return res.status(400).json({ error: 'Las estrellas deben ser un valor entre 0 y 5' });
   }
   if (!resena || !resena.trim()) {
     return res.status(400).json({ error: 'La reseña es obligatoria' });
