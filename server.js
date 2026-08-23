@@ -1303,7 +1303,10 @@ app.get('/asambleas', async (req, res) => {
              p.nombre AS pitar_nombre, p.apellido AS pitar_apellido, p.foto AS pitar_foto,
              t.nombre AS tiempo_nombre, t.apellido AS tiempo_apellido, t.foto AS tiempo_foto,
              COALESCE(AVG(ca.estrellas), 0) AS promedio_estrellas,
-             COUNT(ca.id_calificacion) AS total_calificaciones
+             COUNT(ca.id_calificacion) AS total_calificaciones,
+             COALESCE(json_agg(
+               json_build_object('id_dirigente', ca.id_dirigente)
+             ) FILTER (WHERE ca.id_dirigente IS NOT NULL), '[]') AS calificaciones
       FROM asamblea a
       LEFT JOIN dirigente c ON a.id_encargado = c.id_dirigente
       LEFT JOIN dirigente p ON a.id_encargado_pitar = p.id_dirigente
