@@ -622,32 +622,29 @@ app.get('/asistencia/fecha/:fecha', auth, async (req, res) => {
 });
 
 app.put('/asistencia', auth, async (req, res) => {
-  const { id_dirigente, fecha, estado } = req.body;
+  const { id_dirigente, fecha, estado, metodo_registro } = req.body;
 
   if (!id_dirigente || !fecha || !estado) {
     return res.status(400).json({ error: 'Datos incompletos' });
   }
 
   try {
-    if (estado === 'Presente' || estado === 'Asistirá' || estado === 'No asistirá') {
-      await pool.query(
-        `INSERT INTO asistencia
-         (id_dirigente, fecha, hora_llegada, estado, metodo_registro)
-         VALUES ($1, $2, (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::time, $3, 'Manual')
-         ON CONFLICT (id_dirigente, fecha) DO UPDATE SET estado = EXCLUDED.estado`,
-        [id_dirigente, fecha, estado]
-      );
-    } else {
-      await pool.query(
-        `DELETE FROM asistencia WHERE id_dirigente = $1 AND fecha = $2`,
-        [id_dirigente, fecha]
-      );
-    }
+    const metodo = metodo_registro || 'Manual';
 
-    res.json({ mensaje: 'Asistencia actualizada' });
+    await pool.query(
+      `INSERT INTO asistencia (id_dirigente, fecha, hora_llegada, estado, metodo_registro)
+       VALUES ($1, $2, (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::time, $3, $4)
+       ON CONFLICT (id_dirigente, fecha) 
+       DO UPDATE SET 
+         estado = EXCLUDED.estado,
+         hora_llegada = (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::time,
+         metodo_registro = EXCLUDED.metodo_registro`,
+      [id_dirigente, fecha, estado, metodo]
+    );
 
+    res.json({ mensaje: 'Asistencia actualizada correctamente' });
   } catch (err) {
-    console.error(err);
+    console.error('Error al registrar asistencia:', err);
     res.status(500).json({ error: 'Error al actualizar asistencia' });
   }
 });
