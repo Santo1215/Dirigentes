@@ -497,14 +497,14 @@ app.post('/asistencia/qr', auth, async (req, res) => {
     const qr = qrResult.rows[0];
 
     const existe = await client.query(
-      `SELECT 1
+      `SELECT estado
        FROM asistencia
        WHERE id_dirigente = $1
        AND fecha = CURRENT_DATE`,
       [qr.id_dirigente]
     );
 
-    if (existe.rows.length > 0) {
+    if (existe.rows.length > 0 && existe.rows[0].estado === 'Presente') {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Asistencia ya registrada hoy' });
     }
@@ -513,6 +513,8 @@ app.post('/asistencia/qr', auth, async (req, res) => {
       `INSERT INTO asistencia
        (id_dirigente, fecha, hora_llegada, estado, metodo_registro)
        VALUES ($1, CURRENT_DATE, (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::time, 'Presente', 'QR')
+       ON CONFLICT (id_dirigente, fecha) DO UPDATE 
+       SET hora_llegada = EXCLUDED.hora_llegada, estado = 'Presente', metodo_registro = 'QR'
        RETURNING *`,
       [qr.id_dirigente]
     );
@@ -564,19 +566,21 @@ app.post('/asistencia/manual', auth, async (req, res) => {
     const id_dirigente = dirigente.rows[0].id_dirigente;
 
     const existe = await pool.query(
-      `SELECT 1 FROM asistencia
+      `SELECT estado FROM asistencia
        WHERE id_dirigente = $1 AND fecha = CURRENT_DATE`,
       [id_dirigente]
     );
 
-    if (existe.rows.length > 0) {
+    if (existe.rows.length > 0 && existe.rows[0].estado === 'Presente') {
       return res.status(400).json({ error: 'Asistencia ya registrada hoy' });
     }
 
     const result = await pool.query(
       `INSERT INTO asistencia
-       (id_dirigente, hora_llegada, estado, metodo_registro)
-       VALUES ($1, (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::time, 'Presente', 'Manual')
+       (id_dirigente, fecha, hora_llegada, estado, metodo_registro)
+       VALUES ($1, CURRENT_DATE, (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::time, 'Presente', 'Manual')
+       ON CONFLICT (id_dirigente, fecha) DO UPDATE
+       SET hora_llegada = EXCLUDED.hora_llegada, estado = 'Presente', metodo_registro = 'Manual'
        RETURNING *`,
       [id_dirigente]
     );
@@ -625,13 +629,13 @@ app.put('/asistencia', auth, async (req, res) => {
   }
 
   try {
-    if (estado === 'Presente') {
+    if (estado === 'Presente' || estado === 'Asistirá' || estado === 'No asistirá') {
       await pool.query(
         `INSERT INTO asistencia
          (id_dirigente, fecha, hora_llegada, estado, metodo_registro)
-         VALUES ($1, $2, (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::time, 'Presente', 'Manual')
-         ON CONFLICT (id_dirigente, fecha) DO UPDATE SET estado = 'Presente'`,
-        [id_dirigente, fecha]
+         VALUES ($1, $2, (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::time, $3, 'Calendario')
+         ON CONFLICT (id_dirigente, fecha) DO UPDATE SET estado = EXCLUDED.estado, metodo_registro = EXCLUDED.metodo_registro`,
+        [id_dirigente, fecha, estado]
       );
     } else {
       await pool.query(
