@@ -633,8 +633,8 @@ app.put('/asistencia', auth, async (req, res) => {
       await pool.query(
         `INSERT INTO asistencia
          (id_dirigente, fecha, hora_llegada, estado, metodo_registro)
-         VALUES ($1, $2, (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::time, $3, 'Calendario')
-         ON CONFLICT (id_dirigente, fecha) DO UPDATE SET estado = EXCLUDED.estado, metodo_registro = EXCLUDED.metodo_registro`,
+         VALUES ($1, $2, (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::time, $3, 'Manual')
+         ON CONFLICT (id_dirigente, fecha) DO UPDATE SET estado = EXCLUDED.estado`,
         [id_dirigente, fecha, estado]
       );
     } else {
