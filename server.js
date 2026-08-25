@@ -65,6 +65,19 @@ app.use(
   }
 })();
 
+/* Auto-crear columna verificar_asistencia en actividades si no existe */
+(async () => {
+  try {
+    await pool.query(`
+      ALTER TABLE actividades
+      ADD COLUMN IF NOT EXISTS verificar_asistencia BOOLEAN NOT NULL DEFAULT true;
+    `);
+    console.log('Columna verificar_asistencia lista');
+  } catch (err) {
+    console.error('Error creando columna verificar_asistencia:', err.message);
+  }
+})();
+
 function generarContrasena(longitud = 9) {
   const mayus = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   const minus = 'abcdefghijklmnopqrstuvwxyz';
@@ -1117,6 +1130,46 @@ app.get('/asistencia/reporte-tribus', auth, async (req, res) => {
   }
 });
 
+app.put('/actividades/:id', async (req, res) => {
+  const { id } = req.params;
+  const { verificar_asistencia, titulo, descripcion, fecha, responsable, tipo } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE actividades
+       SET verificar_asistencia = COALESCE($1, verificar_asistencia),
+           titulo = COALESCE($2, titulo),
+           descripcion = COALESCE($3, descripcion),
+           fecha = COALESCE($4, fecha),
+           responsable = COALESCE($5, responsable),
+           tipo = COALESCE($6, tipo)
+       WHERE id_actividad = $7
+       RETURNING *`,
+      [
+        verificar_asistencia === undefined ? null : verificar_asistencia,
+        titulo || null,
+        descripcion || null,
+        fecha || null,
+        responsable || null,
+        tipo || null,
+        id
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Actividad no encontrada' });
+    }
+
+    res.json({
+      mensaje: 'Actividad actualizada correctamente',
+      actividad: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Error actualizando actividad:', err);
+    res.status(500).json({ error: 'Error al actualizar la actividad' });
+  }
+});
+
 app.get('/actividades', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM actividades ORDER BY fecha ASC');
@@ -1128,7 +1181,7 @@ app.get('/actividades', async (req, res) => {
 });
 
 app.post('/actividades', async (req, res) => {
-  const { titulo, descripcion, fecha, responsable, tipo } = req.body;
+  const { titulo, descripcion, fecha, responsable, tipo, verificar_asistencia } = req.body;
 
   if (!titulo || !fecha) {
     return res.status(400).json({ error: 'Faltan datos obligatorios: titulo y fecha' });
@@ -1136,10 +1189,10 @@ app.post('/actividades', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO actividades (titulo, descripcion, fecha, responsable, tipo)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO actividades (titulo, descripcion, fecha, responsable, tipo, verificar_asistencia)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [titulo, descripcion || null, fecha, responsable || null, tipo || 'Otro']
+      [titulo, descripcion || null, fecha, responsable || null, tipo || 'Otro', verificar_asistencia === false ? false : true]
     );
 
     res.status(201).json({
