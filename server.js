@@ -1563,9 +1563,11 @@ app.get('/asistencia/tribu/:id_tribu', auth, async (req, res) => {
         GROUP BY e.id_tribu
       ),
       posibles_exo AS (
-        SELECT COUNT(DISTINCT e.id_exodito) * (SELECT COUNT(*) FROM fechas_exo) AS posibles
+        SELECT e.id_tribu,
+               COUNT(DISTINCT e.id_exodito) * (SELECT COUNT(*) FROM fechas_exo) AS posibles
         FROM exodito e
         WHERE e.id_tribu = $3
+        GROUP BY e.id_tribu
       )
       SELECT
         t.id_tribu, t.nombre, t.color_hex,
@@ -1577,7 +1579,7 @@ app.get('/asistencia/tribu/:id_tribu', auth, async (req, res) => {
         END AS porcentaje
       FROM tribu t
       LEFT JOIN presentes_exo pe ON pe.id_tribu = t.id_tribu
-      LEFT JOIN posibles_exo po ON po.posibles > 0
+      LEFT JOIN posibles_exo po ON po.id_tribu = t.id_tribu
       WHERE t.id_tribu = $3
     `, [desde, hasta, id_tribu]);
 
