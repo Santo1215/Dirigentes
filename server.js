@@ -921,6 +921,107 @@ app.delete('/asistencia/exoditos', auth, async (req, res) => {
   }
 });
 
+app.get('/asistencia/exodito/:id_exodito/buscar', auth, async (req, res) => {
+  const { id_exodito } = req.params;
+  const { desde, hasta } = req.query;
+
+  try {
+    const exoditoResult = await pool.query(
+      `SELECT e.id_exodito, e.nombre, e.apellido, e.cargo, t.nombre AS tribu
+       FROM exodito e
+       JOIN tribu t ON e.id_tribu = t.id_tribu
+       WHERE e.id_exodito = $1`,
+      [id_exodito]
+    );
+
+    if (exoditoResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Exodito no encontrado' });
+    }
+
+    const exodito = exoditoResult.rows[0];
+
+    const totalFechasResult = await pool.query(
+      `SELECT COUNT(DISTINCT fecha) AS total FROM asistencia_exodito`
+    );
+    const totalFechas = parseInt(totalFechasResult.rows[0]?.total || 0);
+
+    const fechasResult = await pool.query(
+      `SELECT DISTINCT fecha FROM asistencia_exodito WHERE id_exodito = $1 AND estado = 'Presente' ORDER BY fecha`,
+      [id_exodito]
+    );
+    const fechas = fechasResult.rows.map(r => r.fecha);
+
+    const totalAsistencias = fechas.length;
+    const porcentajeGlobal = totalFechas > 0 ? Math.round((totalAsistencias / totalFechas) * 100) : 0;
+
+    let rangoPresentes = 0;
+    let rangoPosibles = 0;
+    let porcentajeRango = 0;
+    if (desde && hasta) {
+      const rangoFechasResult = await pool.query(
+        `SELECT COUNT(DISTINCT fecha) AS total FROM asistencia_exodito WHERE fecha BETWEEN $1 AND $2`,
+        [desde, hasta]
+      );
+      rangoPosibles = parseInt(rangoFechasResult.rows[0]?.total || 0);
+
+      const rangoPresentesResult = await pool.query(
+        `SELECT COUNT(DISTINCT fecha) AS total FROM asistencia_exodito WHERE id_exodito = $1 AND fecha BETWEEN $2 AND $3 AND estado = 'Presente'`,
+        [id_exodito, desde, hasta]
+      );
+      rangoPresentes = parseInt(rangoPresentesResult.rows[0]?.total || 0);
+      porcentajeRango = rangoPosibles > 0 ? Math.round((rangoPresentes / rangoPosibles) * 100) : 0;
+    }
+
+    res.json({
+      exodito,
+      total_asistencias: totalAsistencias,
+      fechas_asistencia: fechas,
+      porcentaje_global: porcentajeGlobal,
+      porcentaje_rango: porcentajeRango,
+      rango_presentes: rangoPresentes,
+      rango_posibles: rangoPosibles,
+      desde: desde || null,
+      hasta: hasta || null,
+    });
+  } catch (err) {
+    console.error('Error en buscar exodito:', err);
+    res.status(500).json({ error: 'Error al buscar exodito' });
+  }
+});
+
+app.get('/asistencia/exoditos/todos', auth, async (req, res) => {
+  const { desde, hasta } = req.query;
+
+  if (!desde || !hasta) {
+    return res.status(400).json({ error: 'Se requieren los parámetros "desde" y "hasta"' });
+  }
+
+  try {
+    const result = await pool.query(`
+      SELECT
+        t.nombre AS tribu,
+        t.color_hex,
+        e.id_exodito,
+        e.nombre,
+        e.apellido,
+        e.cargo,
+        COUNT(DISTINCT CASE WHEN ae.fecha BETWEEN $1 AND $2 AND ae.estado = 'Presente' THEN ae.fecha END) AS asistencias_rango,
+        COUNT(DISTINCT CASE WHEN ae.estado = 'Presente' THEN ae.fecha END) AS total_asistencias,
+        (SELECT COUNT(DISTINCT fecha) FROM asistencia_exodito WHERE fecha BETWEEN $1 AND $2) AS rango_posibles
+      FROM exodito e
+      JOIN tribu t ON e.id_tribu = t.id_tribu
+      LEFT JOIN asistencia_exodito ae ON ae.id_exodito = e.id_exodito
+      GROUP BY t.id_tribu, t.nombre, t.color_hex, e.id_exodito, e.nombre, e.apellido, e.cargo
+      ORDER BY t.nombre, e.nombre
+    `, [desde, hasta]);
+
+    res.json({ exoditos: result.rows, desde, hasta });
+  } catch (err) {
+    console.error('Error en todos exoditos:', err);
+    res.status(500).json({ error: 'Error al obtener datos de todos los exoditos' });
+  }
+});
+
 app.delete('/asistencia/dirigentes', auth, async (req, res) => {
   try {
     const result = await pool.query(`DELETE FROM asistencia`);
@@ -1120,7 +1221,7 @@ app.get('/asistencia/reporte-tribus', auth, async (req, res) => {
       LEFT JOIN posibles_exo poe ON poe.id_tribu = t.id_tribu
       WHERE COALESCE(poe.posibles, 0) > 0
       ORDER BY porcentaje DESC, total_presentes DESC
-      LIMIT 5
+      LIMIT 3
     `, [desde, hasta]);
 
     res.json({ tribus: result.rows, desde, hasta });
@@ -1167,6 +1268,23 @@ app.put('/actividades/:id', async (req, res) => {
   } catch (err) {
     console.error('Error actualizando actividad:', err);
     res.status(500).json({ error: 'Error al actualizar la actividad' });
+  }
+});
+
+app.delete('/actividades/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      `DELETE FROM actividades WHERE id_actividad = $1 RETURNING *`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Actividad no encontrada' });
+    }
+    res.json({ mensaje: 'Actividad eliminada', actividad: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar la actividad' });
   }
 });
 
@@ -1420,7 +1538,61 @@ app.delete('/asambleas/:id', async (req, res) => {
   }
 });
 
-/* ── ENDPOINTS DE CALIFICACIONES DE ASAMBLEAS ── */
+app.get('/asistencia/tribu/:id_tribu', auth, async (req, res) => {
+  const { id_tribu } = req.params;
+  const { desde, hasta } = req.query;
+
+  if (!desde || !hasta) {
+    return res.status(400).json({ error: 'Se requieren los parámetros "desde" y "hasta"' });
+  }
+
+  try {
+    const result = await pool.query(`
+      WITH
+      fechas_exo AS (
+        SELECT DISTINCT fecha FROM asistencia_exodito
+        WHERE fecha BETWEEN $1 AND $2
+      ),
+      presentes_exo AS (
+        SELECT e.id_tribu, COUNT(*) AS presentes
+        FROM asistencia_exodito ae
+        JOIN exodito e ON e.id_exodito = ae.id_exodito
+        WHERE ae.fecha BETWEEN $1 AND $2
+          AND e.id_tribu = $3
+          AND ae.estado = 'Presente'
+        GROUP BY e.id_tribu
+      ),
+      posibles_exo AS (
+        SELECT COUNT(DISTINCT e.id_exodito) * (SELECT COUNT(*) FROM fechas_exo) AS posibles
+        FROM exodito e
+        WHERE e.id_tribu = $3
+      )
+      SELECT
+        t.id_tribu, t.nombre, t.color_hex,
+        COALESCE(pe.presentes, 0) AS total_presentes,
+        COALESCE(po.posibles, 0) AS total_posibles,
+        CASE
+          WHEN COALESCE(po.posibles, 0) = 0 THEN 0
+          ELSE ROUND(COALESCE(pe.presentes, 0)::numeric / COALESCE(po.posibles, 0) * 100, 1)
+        END AS porcentaje
+      FROM tribu t
+      LEFT JOIN presentes_exo pe ON pe.id_tribu = t.id_tribu
+      LEFT JOIN posibles_exo po ON po.posibles > 0
+      WHERE t.id_tribu = $3
+    `, [desde, hasta, id_tribu]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Tribu no encontrada' });
+    }
+
+    res.json({ tribu: result.rows[0], desde, hasta });
+  } catch (err) {
+    console.error('Error en reporte-tribu:', err);
+    res.status(500).json({ error: 'Error al generar el reporte de la tribu' });
+  }
+});
+
+/* ENDPOINTS DE CALIFICACIONES DE ASAMBLEAS */
 
 /* GET /asambleas/:id/calificaciones
    Devuelve todas las calificaciones de la asamblea + promedio */
@@ -1518,6 +1690,62 @@ app.post('/asambleas/:id/calificaciones', async (req, res) => {
     }
     console.error('Error guardando calificación:', err);
     res.status(500).json({ error: 'Error al guardar la calificación' });
+  }
+});
+
+/* Railway */
+app.get('/asistencia/tribu/todas', auth, async (req, res) => {
+  const { desde, hasta } = req.query;
+
+  if (!desde || !hasta) {
+    return res.status(400).json({ error: 'Se requieren los parámetros "desde" y "hasta"' });
+  }
+
+  try {
+    const result = await pool.query(`
+      SELECT
+        t.id_tribu,
+        t.nombre AS tribu,
+        t.color_hex,
+        e.id_exodito,
+        e.nombre,
+        e.apellido,
+        e.cargo,
+        COUNT(DISTINCT CASE WHEN ae.fecha BETWEEN $1 AND $2 AND ae.estado = 'Presente' THEN ae.fecha END) AS asistencias_rango,
+        COUNT(DISTINCT CASE WHEN ae.estado = 'Presente' THEN ae.fecha END) AS total_asistencias
+      FROM tribu t
+      LEFT JOIN exodito e ON e.id_tribu = t.id_tribu
+      LEFT JOIN asistencia_exodito ae ON ae.id_exodito = e.id_exodito
+      GROUP BY t.id_tribu, t.nombre, t.color_hex, e.id_exodito, e.nombre, e.apellido, e.cargo
+      ORDER BY t.nombre, e.nombre
+    `, [desde, hasta]);
+
+    const tribusMap = new Map();
+    result.rows.forEach(row => {
+      if (!tribusMap.has(row.id_tribu)) {
+        tribusMap.set(row.id_tribu, {
+          id_tribu: row.id_tribu,
+          nombre: row.tribu,
+          color_hex: row.color_hex,
+          exoditos: []
+        });
+      }
+      if (row.id_exodito) {
+        tribusMap.get(row.id_tribu).exoditos.push({
+          id_exodito: row.id_exodito,
+          nombre: row.nombre,
+          apellido: row.apellido,
+          cargo: row.cargo,
+          asistencias_rango: Number(row.asistencias_rango) || 0,
+          total_asistencias: Number(row.total_asistencias) || 0
+        });
+      }
+    });
+
+    res.json({ tribus: Array.from(tribusMap.values()), desde, hasta });
+  } catch (err) {
+    console.error('Error en tribu/todas:', err);
+    res.status(500).json({ error: 'Error al obtener el reporte completo de tribus' });
   }
 });
 
