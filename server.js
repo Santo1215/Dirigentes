@@ -1720,6 +1720,11 @@ app.get('/asistencia/tribus/todas', auth, async (req, res) => {
 
   try {
     const result = await pool.query(`
+      WITH fechas_rango AS (
+        SELECT COUNT(DISTINCT fecha) AS total_fechas
+        FROM asistencia_exodito
+        WHERE fecha BETWEEN $1 AND $2
+      )
       SELECT
         t.id_tribu,
         t.nombre AS tribu,
@@ -1729,12 +1734,15 @@ app.get('/asistencia/tribus/todas', auth, async (req, res) => {
         e.apellido,
         e.cargo,
         COUNT(DISTINCT CASE WHEN ae.fecha BETWEEN $1 AND $2 AND ae.estado = 'Presente' THEN ae.fecha END) AS asistencias_rango,
-        COUNT(DISTINCT CASE WHEN ae.estado = 'Presente' THEN ae.fecha END) AS total_asistencias
+        COUNT(DISTINCT CASE WHEN ae.estado = 'Presente' THEN ae.fecha END) AS total_asistencias,
+        COUNT(DISTINCT e.id_exodito) AS exoditos_count,
+        COALESCE(fr.total_fechas, 0) AS rango_fechas
       FROM tribu t
       LEFT JOIN exodito e ON e.id_tribu = t.id_tribu
       LEFT JOIN asistencia_exodito ae ON ae.id_exodito = e.id_exodito
-      GROUP BY t.id_tribu, t.nombre, t.color_hex, e.id_exodito, e.nombre, e.apellido, e.cargo
-      ORDER BY t.nombre, e.nombre
+      CROSS JOIN fechas_rango fr
+      GROUP BY t.id_tribu, t.nombre, t.color_hex, e.id_exodito, e.nombre, e.apellido, e.cargo, fr.total_fechas
+      ORDER BY t.id_tribu, e.nombre
     `, [desde, hasta]);
 
     const tribusMap = new Map();
@@ -1744,11 +1752,15 @@ app.get('/asistencia/tribus/todas', auth, async (req, res) => {
           id_tribu: row.id_tribu,
           nombre: row.tribu,
           color_hex: row.color_hex,
-          exoditos: []
+          exoditos: [],
+          rango_fechas: Number(row.rango_fechas) || 0,
+          exoditos_count: Number(row.exoditos_count) || 0,
+          asistencias_rango_total: 0
         });
       }
+      const tribu = tribusMap.get(row.id_tribu);
       if (row.id_exodito) {
-        tribusMap.get(row.id_tribu).exoditos.push({
+        tribu.exoditos.push({
           id_exodito: row.id_exodito,
           nombre: row.nombre,
           apellido: row.apellido,
@@ -1756,10 +1768,17 @@ app.get('/asistencia/tribus/todas', auth, async (req, res) => {
           asistencias_rango: Number(row.asistencias_rango) || 0,
           total_asistencias: Number(row.total_asistencias) || 0
         });
+        tribu.asistencias_rango_total += Number(row.asistencias_rango) || 0;
       }
     });
 
-    res.json({ tribus: Array.from(tribusMap.values()), desde, hasta });
+    const tribus = Array.from(tribusMap.values()).map(t => {
+      const posibles = t.exoditos_count * t.rango_fechas;
+      const porcentaje = posibles > 0 ? Math.round((t.asistencias_rango_total / posibles) * 100) : 0;
+      return { ...t, porcentaje, posibles };
+    });
+
+    res.json({ tribus, desde, hasta });
   } catch (err) {
     console.error('Error en tribus/todas:', err);
     res.status(500).json({ error: 'Error al obtener el reporte completo de tribus' });
