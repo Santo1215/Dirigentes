@@ -1516,9 +1516,24 @@ app.put('/asambleas/:id', async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE asamblea
-       SET titulo = $1, id_encargado_pitar = $2, id_encargado_tiempo = $3, otros_encargados = $4, materiales = $5, fecha = $6, descripcion = $7
+       SET titulo = COALESCE($1, titulo),
+           id_encargado_pitar = COALESCE($2, id_encargado_pitar),
+           id_encargado_tiempo = COALESCE($3, id_encargado_tiempo),
+           otros_encargados = COALESCE($4, otros_encargados),
+           materiales = COALESCE($5, materiales),
+           fecha = COALESCE($6, fecha),
+           descripcion = COALESCE($7, descripcion)
        WHERE id_asamblea = $8 RETURNING *`,
-      [titulo, id_encargado_pitar || null, id_encargado_tiempo || null, JSON.stringify(otros_encargados || []), materiales, fecha, descripcion, id]
+      [
+        titulo || null,
+        id_encargado_pitar || null,
+        id_encargado_tiempo || null,
+        otros_encargados ? JSON.stringify(otros_encargados) : null,
+        materiales || null,
+        fecha || null,
+        descripcion || null,
+        id
+      ]
     );
     res.json({ mensaje: 'Asamblea actualizada', asamblea: result.rows[0] });
   } catch (err) {
@@ -1696,7 +1711,7 @@ app.post('/asambleas/:id/calificaciones', async (req, res) => {
 });
 
 /* Railway */
-app.get('/asistencia/tribu/todas', auth, async (req, res) => {
+app.get('/asistencia/tribus/todas', auth, async (req, res) => {
   const { desde, hasta } = req.query;
 
   if (!desde || !hasta) {
@@ -1746,7 +1761,7 @@ app.get('/asistencia/tribu/todas', auth, async (req, res) => {
 
     res.json({ tribus: Array.from(tribusMap.values()), desde, hasta });
   } catch (err) {
-    console.error('Error en tribu/todas:', err);
+    console.error('Error en tribus/todas:', err);
     res.status(500).json({ error: 'Error al obtener el reporte completo de tribus' });
   }
 });
