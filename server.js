@@ -1466,7 +1466,6 @@ app.get('/materiales', async (req, res) => {
         END AS foto
       FROM materiales m
       LEFT JOIN dirigente d ON m.id_dirigente = d.id_dirigente
-      WHERE LOWER(COALESCE(d.rol, '')) <> 'asesoría'
       ORDER BY m.nombre_material ASC
     `;
     const result = await pool.query(query);
