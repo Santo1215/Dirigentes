@@ -786,6 +786,22 @@ app.get('/exoditos/tribu/:id_tribu', auth, async (req, res) => {
   }
 });
 
+app.get('/exoditos/sinai', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT e.id_exodito, e.nombre, e.apellido, e.cargo, e.id_tribu, t.nombre AS tribu
+       FROM exodito e
+       JOIN tribu t ON e.id_tribu = t.id_tribu
+       WHERE e.cargo <> 'Exodito'
+       ORDER BY t.nombre, CASE e.cargo WHEN 'Jefe' THEN 1 WHEN 'Subjefe' THEN 2 WHEN 'Líder' THEN 3 ELSE 4 END`
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Error al obtener exoditos para Sinai' });
+  }
+});
+
 app.post('/exoditos', auth, async (req, res) => {
   const { nombre, apellido, cargo, id_tribu } = req.body;
 
