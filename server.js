@@ -91,6 +91,25 @@ app.use(
   }
 })();
 
+/* Auto-crear tabla asistencia_exodito_sinai si no existe */
+(async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS asistencia_exodito_sinai (
+        id SERIAL PRIMARY KEY,
+        id_exodito INTEGER REFERENCES exodito(id_exodito) ON DELETE CASCADE,
+        fecha DATE NOT NULL,
+        estado TEXT NOT NULL DEFAULT 'Sinaí',
+        created_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(id_exodito, fecha)
+      );
+    `);
+    console.log('Tabla asistencia_exodito_sinai lista');
+  } catch (err) {
+    console.error('Error creando tabla asistencia_exodito_sinai:', err.message);
+  }
+})();
+
 function generarContrasena(longitud = 9) {
   const mayus = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   const minus = 'abcdefghijklmnopqrstuvwxyz';
@@ -793,7 +812,7 @@ app.get('/exoditos/sinai', auth, async (req, res) => {
        FROM exodito e
        JOIN tribu t ON e.id_tribu = t.id_tribu
        WHERE e.cargo <> 'Exodito'
-       ORDER BY t.nombre, CASE e.cargo WHEN 'Jefe' THEN 1 WHEN 'Subjefe' THEN 2 WHEN 'Líder' THEN 3 ELSE 4 END`
+       ORDER BY t.id_tribu ASC, CASE e.cargo WHEN 'Jefe' THEN 1 WHEN 'Subjefe' THEN 2 WHEN 'Líder' THEN 3 ELSE 4 END`
     );
 
     res.json(result.rows);
@@ -950,6 +969,74 @@ app.delete('/asistencia/exoditos', auth, async (req, res) => {
   }
 });
 
+app.get('/asistencia/exoditos/sinai/:fecha', auth, async (req, res) => {
+  const { fecha } = req.params;
+
+  try {
+    const result = await pool.query(`
+      SELECT
+        t.nombre AS tribu, e.id_exodito, e.nombre, e.apellido, e.cargo, ae.estado
+      FROM exodito e
+      JOIN tribu t ON t.id_tribu = e.id_tribu
+      LEFT JOIN asistencia_exodito_sinai ae
+        ON ae.id_exodito = e.id_exodito AND ae.fecha = $1
+      ORDER BY t.id_tribu ASC, e.nombre ASC
+    `, [fecha]);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al obtener asistencia Sinaí' });
+  }
+});
+
+app.post('/asistencia/exoditos/sinai', auth, async (req, res) => {
+  const { asistencias, fecha } = req.body;
+
+  if (!Array.isArray(asistencias) || asistencias.length === 0) {
+    return res.status(400).json({ error: 'No hay asistencias para registrar' });
+  }
+
+  const fechaRegistro = fecha && /^\d{4}-\d{2}-\d{2}$/.test(fecha)
+    ? fecha
+    : new Date().toISOString().slice(0, 10);
+
+  try {
+    const queries = asistencias.map(({ id_exodito }) => {
+      return pool.query(
+        `INSERT INTO asistencia_exodito_sinai (id_exodito, fecha, estado)
+         VALUES ($1, $2, 'Sinaí')
+         ON CONFLICT (id_exodito, fecha) DO UPDATE SET estado = 'Sinaí'`,
+        [id_exodito, fechaRegistro]
+      );
+    });
+
+    await Promise.all(queries);
+
+    res.json({
+      message: 'Asistencia Sinaí registrada correctamente',
+      total: asistencias.length,
+      fecha: fechaRegistro,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al registrar asistencia Sinaí' });
+  }
+});
+
+app.delete('/asistencia/exoditos/sinai', auth, async (req, res) => {
+  try {
+    const result = await pool.query(`DELETE FROM asistencia_exodito_sinai`);
+    res.json({
+      mensaje: 'Asistencia Sinaí eliminada',
+      eliminados: result.rowCount,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar asistencia Sinaí' });
+  }
+});
+
 app.get('/asistencia/exodito/:id_exodito/buscar', auth, async (req, res) => {
   const { id_exodito } = req.params;
   const { desde, hasta } = req.query;
@@ -1041,7 +1128,7 @@ app.get('/asistencia/exoditos/todos', auth, async (req, res) => {
       JOIN tribu t ON e.id_tribu = t.id_tribu
       LEFT JOIN asistencia_exodito ae ON ae.id_exodito = e.id_exodito
       GROUP BY t.id_tribu, t.nombre, t.color_hex, e.id_exodito, e.nombre, e.apellido, e.cargo
-      ORDER BY t.nombre, e.nombre
+      ORDER BY t.id_tribu, e.nombre
     `, [desde, hasta]);
 
     res.json({ exoditos: result.rows, desde, hasta });
@@ -1741,7 +1828,6 @@ app.post('/asambleas/:id/calificaciones', async (req, res) => {
   }
 });
 
-/* Railway */
 app.get('/asistencia/tribus/todas', auth, async (req, res) => {
   const { desde, hasta } = req.query;
 
