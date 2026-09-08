@@ -312,8 +312,8 @@ app.get('/dirigente/:id/qr', async (req, res) => {
 app.get('/dirigentes', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT 
-        id_dirigente, nombre, segundo_nombre, apellido, rol, comite, id_tribu, id_tribu_secundaria, curso, foto
+      SELECT
+        id_dirigente, nombre, segundo_nombre, apellido, rol, comite, id_tribu, id_tribu_secundaria, curso, foto, codigo, usuario
       FROM dirigente
       ORDER BY nombre ASC
     `);
