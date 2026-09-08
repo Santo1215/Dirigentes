@@ -261,15 +261,13 @@ app.post('/dirigente', async (req, res) => {
     );
 
     const codigoQR = `DIR-${dirigente.nombre}-${dirigente.apellido}-${dirigente.id_dirigente}`;
-    const tokenSecreto = crypto.randomBytes(16).toString('hex');
 
     await client.query(
       `
-      INSERT INTO qr_personal
-      (id_dirigente, codigo_qr, token_secreto)
-      VALUES ($1,$2,$3)
+      INSERT INTO qr_personal (id_dirigente, codigo_qr)
+      VALUES ($1, $2)
       `,
-      [dirigente.id_dirigente, codigoQR, tokenSecreto]
+      [dirigente.id_dirigente, codigoQR]
     );
 
     await client.query('COMMIT');
@@ -331,7 +329,7 @@ app.get('/dirigente/:id/qr', async (req, res) => {
 app.get('/dirigentes', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT
+      SELECT 
         id_dirigente, nombre, segundo_nombre, apellido, rol, comite, id_tribu, id_tribu_secundaria, curso, foto, codigo, usuario
       FROM dirigente
       ORDER BY nombre ASC
@@ -541,12 +539,22 @@ app.post('/asistencia/qr', auth, async (req, res) => {
 
     const qr = qrResult.rows[0];
 
+    const dirigenteInfo = await client.query(
+      'SELECT rol FROM dirigente WHERE id_dirigente = $1',
+      [qr.id_dirigente]
+    );
+
+    if (dirigenteInfo.rows.length > 0 && LOWER(dirigenteInfo.rows[0].rol) = ANY (ARRAY['asesoría', 'asesoria'])) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Los asesores no registran asistencia por QR' });
+    }
+
     const existe = await client.query(
       `SELECT estado
        FROM asistencia
        WHERE id_dirigente = $1
        AND fecha = CURRENT_DATE`,
-      [qr.id_dirigente]
+       [qr.id_dirigente]
     );
 
     if (existe.rows.length > 0 && existe.rows[0].estado === 'Presente') {
@@ -600,12 +608,16 @@ app.post('/asistencia/manual', auth, async (req, res) => {
 
   try {
     const dirigente = await pool.query(
-      `SELECT id_dirigente FROM dirigente WHERE codigo = $1`,
+      `SELECT id_dirigente, rol FROM dirigente WHERE codigo = $1`,
       [codigo]
     );
 
     if (dirigente.rows.length === 0) {
       return res.status(404).json({ error: 'Código inválido' });
+    }
+
+    if (LOWER(dirigente.rows[0].rol) = ANY (ARRAY['asesoría', 'asesoria'])) {
+      return res.status(400).json({ error: 'Los asesores no registran asistencia' });
     }
 
     const id_dirigente = dirigente.rows[0].id_dirigente;
@@ -654,6 +666,7 @@ app.get('/asistencia/fecha/:fecha', auth, async (req, res) => {
       LEFT JOIN asistencia a
         ON d.id_dirigente = a.id_dirigente
         AND a.fecha = $1
+      WHERE LOWER(COALESCE(d.rol, '')) <> 'asesoría'
       ORDER BY d.nombre
       `,
       [fecha]
@@ -674,6 +687,15 @@ app.put('/asistencia', auth, async (req, res) => {
   }
 
   try {
+    const dirigente = await pool.query(
+      'SELECT rol FROM dirigente WHERE id_dirigente = $1',
+      [id_dirigente]
+    );
+
+    if (dirigente.rows.length > 0 && dirigente.rows[0].rol === 'Asesoría') {
+      return res.status(400).json({ error: 'No se puede registrar asistencia para asesores' });
+    }
+
     const metodo = metodo_registro || 'Manual';
 
     await pool.query(
@@ -700,6 +722,7 @@ app.get('/multas', auth, async (req, res) => {
       ` SELECT m.id_multa, m.fecha, m.monto, m.motivo, m.detalle, m.id_dirigente, d.nombre, d.apellido, d.comite 
         FROM multa m 
         JOIN dirigente d ON m.id_dirigente = d.id_dirigente 
+        WHERE LOWER(COALESCE(d.rol, '')) <> 'asesoría'
         ORDER BY m.fecha DESC `
     );
     res.json(result.rows);
@@ -717,6 +740,9 @@ app.get('/multas/dirigente/:id', auth, async (req, res) => {
       SELECT id_multa, fecha, monto, motivo, detalle, id_dirigente
       FROM multa
       WHERE id_dirigente = $1
+        AND id_dirigente IN (
+          SELECT id_dirigente FROM dirigente WHERE LOWER(COALESCE(rol, '')) <> 'asesoría'
+        )
       ORDER BY fecha DESC
       `,
       [id]
@@ -808,7 +834,7 @@ app.get('/exoditos/tribu/:id_tribu', auth, async (req, res) => {
 app.get('/exoditos/sinai', auth, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT e.id_exodito, e.nombre, e.apellido, e.cargo, e.id_tribu, t.nombre AS tribu
+      `SELECT e.id_exodito, e.nombre, e.apellido, e.cargo, e.id_tribu, t.nombre AS tribu, t.color_hex
        FROM exodito e
        JOIN tribu t ON e.id_tribu = t.id_tribu
        WHERE e.cargo <> 'Exodito'
@@ -1453,6 +1479,7 @@ app.get('/materiales', async (req, res) => {
         END AS foto
       FROM materiales m
       LEFT JOIN dirigente d ON m.id_dirigente = d.id_dirigente
+      WHERE LOWER(COALESCE(d.rol, '')) <> 'asesoría'
       ORDER BY m.nombre_material ASC
     `;
     const result = await pool.query(query);
@@ -1550,7 +1577,20 @@ app.post('/actividades/:id/confirmar', async (req, res) => {
   const { id } = req.params;
   const { id_dirigente, estado } = req.body; 
 
+  if (!id_dirigente) {
+    return res.status(400).json({ error: 'Datos incompletos' });
+  }
+
   try {
+    const dirigenteCheck = await pool.query(
+      'SELECT rol FROM dirigente WHERE id_dirigente = $1',
+      [id_dirigente]
+    );
+
+    if (dirigenteCheck.rows.length > 0 && LOWER(dirigenteCheck.rows[0].rol) = ANY (ARRAY['asesoría', 'asesoria'])) {
+      return res.status(400).json({ error: 'No se puede registrar asistencia para asesores' });
+    }
+
     const query = `
       INSERT INTO asistencia_actividad (id_actividad, id_dirigente, estado)
       VALUES ($1, $2, $3)
@@ -1574,6 +1614,7 @@ app.get('/actividades/:id/asistentes', async (req, res) => {
       FROM asistencia_actividad aa
       JOIN dirigente d ON aa.id_dirigente = d.id_dirigente
       WHERE aa.id_actividad = $1
+        AND LOWER(COALESCE(d.rol, '')) <> 'asesoría'
     `;
     const result = await pool.query(query, [id]);
     res.json(result.rows);
@@ -1601,6 +1642,9 @@ app.get('/asambleas', async (req, res) => {
       LEFT JOIN dirigente p ON a.id_encargado_pitar = p.id_dirigente
       LEFT JOIN dirigente t ON a.id_encargado_tiempo = t.id_dirigente
       LEFT JOIN calificacion_asamblea ca ON a.id_asamblea = ca.id_asamblea
+        AND ca.id_dirigente IN (
+          SELECT id_dirigente FROM dirigente WHERE LOWER(COALESCE(rol, '')) <> 'asesoría'
+        )
       GROUP BY a.id_asamblea, c.id_dirigente, p.id_dirigente, t.id_dirigente
       ORDER BY a.fecha ASC
     `;
@@ -1747,6 +1791,7 @@ app.get('/asambleas/:id/calificaciones', async (req, res) => {
        FROM calificacion_asamblea ca
        JOIN dirigente d ON ca.id_dirigente = d.id_dirigente
        WHERE ca.id_asamblea = $1
+         AND LOWER(COALESCE(d.rol, '')) <> 'asesoría'
        ORDER BY ca.fecha_registro DESC`,
       [id]
     );
