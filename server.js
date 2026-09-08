@@ -78,19 +78,6 @@ app.use(
   }
 })();
 
-/* Auto-crear columna curso en dirigente si no existe */
-(async () => {
-  try {
-    await pool.query(`
-      ALTER TABLE dirigente
-      ADD COLUMN IF NOT EXISTS curso TEXT;
-    `);
-    console.log('Columna curso lista');
-  } catch (err) {
-    console.error('Error creando columna curso:', err.message);
-  }
-})();
-
 /* Auto-crear tabla asistencia_exodito_sinai si no existe */
 (async () => {
   try {
@@ -1487,6 +1474,20 @@ app.get('/materiales', async (req, res) => {
   } catch (error) {
     console.error('Error al consultar materiales:', error);
     res.status(500).json({ error: 'Error al obtener el inventario de materiales' });
+  }
+});
+
+app.get('/materiales/todos', auth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id_material, nombre_material, cantidad, id_dirigente
+      FROM materiales
+      ORDER BY nombre_material ASC
+    `);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error al consultar materiales:', error);
+    res.status(500).json({ error: 'Error al obtener materiales' });
   }
 });
 
