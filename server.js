@@ -78,6 +78,19 @@ app.use(
   }
 })();
 
+/* Auto-crear columna curso en dirigente si no existe */
+(async () => {
+  try {
+    await pool.query(`
+      ALTER TABLE dirigente
+      ADD COLUMN IF NOT EXISTS curso TEXT;
+    `);
+    console.log('Columna curso lista');
+  } catch (err) {
+    console.error('Error creando columna curso:', err.message);
+  }
+})();
+
 function generarContrasena(longitud = 9) {
   const mayus = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   const minus = 'abcdefghijklmnopqrstuvwxyz';
@@ -300,21 +313,21 @@ app.get('/dirigentes', async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
-        id_dirigente, nombre, segundo_nombre, apellido, rol, comite, id_tribu, id_tribu_secundaria, foto
+        id_dirigente, nombre, segundo_nombre, apellido, rol, comite, id_tribu, id_tribu_secundaria, curso, foto
       FROM dirigente
       ORDER BY nombre ASC
     `);
 
     res.json(result.rows);
   } catch (error) {
-    console.error('Error obteniendo dirigentes:', error);
-    res.status(500).json({ message: 'Error del servidor' });
+    console.error(error);
+    res.status(500).json({ error: 'Error al obtener los dirigentes' });
   }
 });
 
 app.put('/dirigente/:id', async (req, res) => {
   const { id } = req.params;
-  const { rol, comite, id_tribu, id_tribu_secundaria } = req.body;
+  const { rol, comite, id_tribu, id_tribu_secundaria, curso } = req.body;
 
   if (!rol) {
     return res.status(400).json({ message: 'El rol es obligatorio' });
@@ -324,11 +337,11 @@ app.put('/dirigente/:id', async (req, res) => {
     const result = await pool.query(
       `
       UPDATE dirigente
-      SET rol = $1, comite = $2, id_tribu = $3, id_tribu_secundaria = $4
-      WHERE id_dirigente = $5
-      RETURNING id_dirigente, nombre, apellido, rol, comite, id_tribu, id_tribu_secundaria
+      SET rol = $1, comite = $2, id_tribu = $3, id_tribu_secundaria = $4, curso = $5
+      WHERE id_dirigente = $6
+      RETURNING id_dirigente, nombre, apellido, rol, comite, id_tribu, id_tribu_secundaria, curso
       `,
-      [rol, comite || null, id_tribu || null, id_tribu_secundaria || null, id]
+      [rol, comite || null, id_tribu || null, id_tribu_secundaria || null, curso || null, id]
     );
 
     if (result.rows.length === 0) {
@@ -1274,6 +1287,7 @@ app.put('/actividades/:id', async (req, res) => {
 app.delete('/actividades/:id', async (req, res) => {
   const { id } = req.params;
   try {
+    await pool.query('DELETE FROM asistencia_actividad WHERE id_actividad = $1', [id]);
     const result = await pool.query(
       `DELETE FROM actividades WHERE id_actividad = $1 RETURNING *`,
       [id]
@@ -1545,6 +1559,7 @@ app.put('/asambleas/:id', async (req, res) => {
 app.delete('/asambleas/:id', async (req, res) => {
   const { id } = req.params;
   try {
+    await pool.query('DELETE FROM calificacion_asamblea WHERE id_asamblea = $1', [id]);
     await pool.query('DELETE FROM asamblea WHERE id_asamblea = $1', [id]);
     res.json({ mensaje: 'Asamblea eliminada' });
   } catch (err) {
