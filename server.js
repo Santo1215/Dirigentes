@@ -531,7 +531,7 @@ app.post('/asistencia/qr', auth, async (req, res) => {
       [qr.id_dirigente]
     );
 
-    if (dirigenteInfo.rows.length > 0 && ['asesoría', 'asesoria'].includes(LOWER(dirigenteInfo.rows[0].rol))) {
+    if (dirigenteInfo.rows.length > 0 && ['asesoría', 'asesoria'].includes((dirigenteInfo.rows[0].rol || '').toLowerCase())) {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Los asesores no registran asistencia por QR' });
     }
@@ -603,7 +603,7 @@ app.post('/asistencia/manual', auth, async (req, res) => {
       return res.status(404).json({ error: 'Código inválido' });
     }
 
-    if (['asesoría', 'asesoria'].includes(LOWER(dirigente.rows[0].rol))) {
+    if (['asesoría', 'asesoria'].includes((dirigente.rows[0].rol || '').toLowerCase())) {
       return res.status(400).json({ error: 'Los asesores no registran asistencia' });
     }
 
@@ -1587,7 +1587,7 @@ app.post('/actividades/:id/confirmar', async (req, res) => {
       [id_dirigente]
     );
 
-    if (dirigenteCheck.rows.length > 0 && ['asesoría', 'asesoria'].includes(LOWER(dirigenteCheck.rows[0].rol))) {
+    if (dirigenteCheck.rows.length > 0 && ['asesoría', 'asesoria'].includes((dirigenteCheck.rows[0].rol || '').toLowerCase())) {
       return res.status(400).json({ error: 'No se puede registrar asistencia para asesores' });
     }
 
