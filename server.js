@@ -1628,7 +1628,7 @@ app.get('/actividades/:id/asistentes', async (req, res) => {
 app.get('/asambleas', async (req, res) => {
   try {
     const query = `
-      SELECT a.*, 
+      SELECT a.*,
              c.nombre AS encargado_nombre, c.apellido AS encargado_apellido,
              p.nombre AS pitar_nombre, p.apellido AS pitar_apellido, p.foto AS pitar_foto,
              t.nombre AS tiempo_nombre, t.apellido AS tiempo_apellido, t.foto AS tiempo_foto,
@@ -1639,8 +1639,11 @@ app.get('/asambleas', async (req, res) => {
              ) FILTER (WHERE ca.id_dirigente IS NOT NULL), '[]') AS calificaciones
       FROM asamblea a
       LEFT JOIN dirigente c ON a.id_encargado = c.id_dirigente
+        AND LOWER(COALESCE(c.rol, '')) <> 'asesoría'
       LEFT JOIN dirigente p ON a.id_encargado_pitar = p.id_dirigente
+        AND LOWER(COALESCE(p.rol, '')) <> 'asesoría'
       LEFT JOIN dirigente t ON a.id_encargado_tiempo = t.id_dirigente
+        AND LOWER(COALESCE(t.rol, '')) <> 'asesoría'
       LEFT JOIN calificacion_asamblea ca ON a.id_asamblea = ca.id_asamblea
         AND ca.id_dirigente IN (
           SELECT id_dirigente FROM dirigente WHERE LOWER(COALESCE(rol, '')) <> 'asesoría'
@@ -1963,6 +1966,125 @@ app.get('/asistencia/tribus/todas', auth, async (req, res) => {
   } catch (err) {
     console.error('Error en tribus/todas:', err);
     res.status(500).json({ error: 'Error al obtener el reporte completo de tribus' });
+  }
+});
+
+/* ==============================================
+   SUGERENCIAS DE PUNTOS
+============================================== */
+
+app.get('/sugerencias-puntos/usuario/:id_dirigente', async (req, res) => {
+  const { id_dirigente } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT sp.*, d.nombre as dirigente_nombre, d.apellido as dirigente_apellido
+       FROM sugerencias_puntos sp
+       JOIN dirigente d ON d.id_dirigente = sp.id_dirigente
+       WHERE sp.id_dirigente = $1
+       ORDER BY sp.creado_en DESC`,
+      [id_dirigente]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error obteniendo sugerencias de usuario:', err);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/sugerencias-puntos', async (req, res) => {
+  const { id_dirigente, id_tribu, tipo_accion, puntos, descripcion } = req.body;
+  
+  if (!id_dirigente || !id_tribu || !tipo_accion || !descripcion) {
+    return res.status(400).json({ error: 'Faltan datos obligatorios' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const result = await client.query(
+      `INSERT INTO sugerencias_puntos (id_dirigente, tipo_accion, puntos, descripcion)
+       VALUES ($1, $2, $3, $4) RETURNING id`,
+      [id_dirigente, tipo_accion, tipo_accion === 'sumar' ? puntos : null, descripcion]
+    );
+    
+    const idSugerencia = result.rows[0].id;
+
+    const tribusArray = id_tribu.split(',').filter(id => id.trim() !== '');
+    
+    for (const tribuId of tribusArray) {
+      await client.query(
+        `INSERT INTO sugerencia_tribus (id_sugerencia, id_tribu) VALUES ($1, $2)`,
+        [idSugerencia, tribuId]
+      );
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json({ message: 'Sugerencia creada con éxito' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error creando sugerencia:', err);
+    res.status(500).json({ error: 'Error al crear sugerencia' });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/sugerencias-puntos/pendientes', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT sp.*, 
+             d.nombre as dirigente_nombre, 
+             d.apellido as dirigente_apellido,
+             (
+                SELECT string_agg(st.id_tribu::text, ',') 
+                FROM sugerencia_tribus st 
+                WHERE st.id_sugerencia = sp.id
+             ) as id_tribu
+      FROM sugerencias_puntos sp
+      JOIN dirigente d ON d.id_dirigente = sp.id_dirigente
+      WHERE sp.estado = 'Pendiente'
+      ORDER BY sp.creado_en ASC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error obteniendo sugerencias pendientes:', err);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.put('/sugerencias-puntos/:id/estado', async (req, res) => {
+  const { id } = req.params;
+  const { estado, justificacion } = req.body; 
+
+  if (!estado || (estado === 'Rechazada' && !justificacion)) {
+    return res.status(400).json({ error: 'Datos inválidos o falta justificación para rechazo' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const sugResult = await client.query(
+      `UPDATE sugerencias_puntos 
+       SET estado = $1, justificacion = $2, actualizado_en = CURRENT_TIMESTAMP
+       WHERE id = $3 RETURNING *`,
+      [estado, justificacion, id]
+    );
+
+    if (sugResult.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Sugerencia no encontrada' });
+    }
+
+    await client.query('COMMIT');
+    res.json({ message: `Sugerencia ${estado.toLowerCase()} con éxito` });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error actualizando sugerencia:', err);
+    res.status(500).json({ error: 'Error del servidor' });
+  } finally {
+    client.release();
   }
 });
 
