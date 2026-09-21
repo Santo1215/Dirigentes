@@ -1969,9 +1969,26 @@ app.get('/asistencia/tribus/todas', auth, async (req, res) => {
   }
 });
 
-/* ==============================================
-   SUGERENCIAS DE PUNTOS
-============================================== */
+
+/* Auto-crear tabla sugerencia_votos */
+(async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sugerencia_votos (
+        id SERIAL PRIMARY KEY,
+        id_sugerencia INT NOT NULL REFERENCES sugerencias_puntos(id) ON DELETE CASCADE,
+        id_dirigente INT NOT NULL REFERENCES dirigente(id_dirigente) ON DELETE CASCADE,
+        voto VARCHAR(20) NOT NULL CHECK (voto IN ('Aprobada', 'Rechazada')),
+        justificacion TEXT,
+        creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(id_sugerencia, id_dirigente)
+      );
+    `);
+    console.log('Tabla sugerencia_votos lista');
+  } catch (err) {
+    console.error('Error creando tabla sugerencia_votos:', err.message);
+  }
+})();
 
 app.get('/sugerencias-puntos/usuario/:id_dirigente', async (req, res) => {
   const { id_dirigente } = req.params;
@@ -2002,6 +2019,16 @@ app.post('/sugerencias-puntos', async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    // Verificar que no tenga una sugerencia pendiente activa
+    const pendiente = await client.query(
+      `SELECT id FROM sugerencias_puntos WHERE id_dirigente = $1 AND estado = 'Pendiente'`,
+      [id_dirigente]
+    );
+    if (pendiente.rowCount > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Ya tienes una sugerencia pendiente.' });
+    }
+
     const result = await client.query(
       `INSERT INTO sugerencias_puntos (id_dirigente, tipo_accion, puntos, descripcion)
        VALUES ($1, $2, $3, $4) RETURNING id`,
@@ -2009,7 +2036,6 @@ app.post('/sugerencias-puntos', async (req, res) => {
     );
     
     const idSugerencia = result.rows[0].id;
-
     const tribusArray = id_tribu.split(',').filter(id => id.trim() !== '');
     
     for (const tribuId of tribusArray) {
@@ -2030,28 +2056,31 @@ app.post('/sugerencias-puntos', async (req, res) => {
   }
 });
 
+/* GET pendientes — incluye conteo de votos y si el solicitante (id_votante) ya votó */
 app.get('/sugerencias-puntos/pendientes', async (req, res) => {
+  const { id_votante } = req.query;
   try {
     const result = await pool.query(`
       SELECT sp.*, 
              d.nombre as dirigente_nombre, 
              d.apellido as dirigente_apellido,
-             (
-                SELECT string_agg(st.id_tribu::text, ',') 
-                FROM sugerencia_tribus st 
-                WHERE st.id_sugerencia = sp.id
-             ) as id_tribu,
-             (
-                SELECT string_agg(t.nombre, ', ') 
-                FROM sugerencia_tribus st 
-                JOIN tribu t ON t.id_tribu = st.id_tribu
-                WHERE st.id_sugerencia = sp.id
-             ) as tribus_nombres
+             (SELECT string_agg(st.id_tribu::text, ',') 
+              FROM sugerencia_tribus st 
+              WHERE st.id_sugerencia = sp.id) as id_tribu,
+             (SELECT string_agg(t.nombre, ', ') 
+              FROM sugerencia_tribus st 
+              JOIN tribu t ON t.id_tribu = st.id_tribu
+              WHERE st.id_sugerencia = sp.id) as tribus_nombres,
+             (SELECT COUNT(*) FROM sugerencia_votos sv WHERE sv.id_sugerencia = sp.id) as votos_emitidos,
+             (SELECT COUNT(*) FROM dirigente WHERE comite = 'Puntos') as total_comite,
+             (SELECT voto FROM sugerencia_votos sv 
+              WHERE sv.id_sugerencia = sp.id AND sv.id_dirigente = $1
+              LIMIT 1) as mi_voto
       FROM sugerencias_puntos sp
       JOIN dirigente d ON d.id_dirigente = sp.id_dirigente
       WHERE sp.estado = 'Pendiente'
       ORDER BY sp.creado_en ASC
-    `);
+    `, [id_votante || 0]);
     res.json(result.rows);
   } catch (err) {
     console.error('Error obteniendo sugerencias pendientes:', err);
@@ -2059,40 +2088,97 @@ app.get('/sugerencias-puntos/pendientes', async (req, res) => {
   }
 });
 
-app.put('/sugerencias-puntos/:id/estado', async (req, res) => {
+/* POST votar — registra el voto de un miembro del comité */
+app.post('/sugerencias-puntos/:id/votar', async (req, res) => {
   const { id } = req.params;
-  const { estado, justificacion } = req.body; 
+  const { id_dirigente, voto, justificacion } = req.body;
 
-  if (!estado || (estado === 'Rechazada' && !justificacion)) {
-    return res.status(400).json({ error: 'Datos inválidos o falta justificación para rechazo' });
+  if (!id_dirigente || !voto) {
+    return res.status(400).json({ error: 'Faltan datos obligatorios' });
+  }
+  if (voto === 'Rechazada' && !justificacion) {
+    return res.status(400).json({ error: 'Se requiere justificación para rechazar' });
   }
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    const sugResult = await client.query(
-      `UPDATE sugerencias_puntos 
-       SET estado = $1, justificacion = $2, actualizado_en = CURRENT_TIMESTAMP
-       WHERE id = $3 RETURNING *`,
-      [estado, justificacion, id]
+    // Registrar o actualizar el voto de este miembro
+    await client.query(
+      `INSERT INTO sugerencia_votos (id_sugerencia, id_dirigente, voto, justificacion)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id_sugerencia, id_dirigente) 
+       DO UPDATE SET voto = $3, justificacion = $4, creado_en = CURRENT_TIMESTAMP`,
+      [id, id_dirigente, voto, justificacion || null]
     );
 
-    if (sugResult.rowCount === 0) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Sugerencia no encontrada' });
+    // Si alguien rechaza → la sugerencia queda rechazada de inmediato
+    if (voto === 'Rechazada') {
+      await client.query(
+        `UPDATE sugerencias_puntos 
+         SET estado = 'Rechazada', justificacion = $1, actualizado_en = CURRENT_TIMESTAMP
+         WHERE id = $2`,
+        [justificacion, id]
+      );
+      await client.query('COMMIT');
+      return res.json({ message: 'Sugerencia rechazada.', resultado: 'Rechazada' });
+    }
+
+    // Contar votos de aprobación vs total de miembros del comité Puntos
+    const votosRes = await client.query(
+      `SELECT COUNT(*) as aprobaciones FROM sugerencia_votos WHERE id_sugerencia = $1 AND voto = 'Aprobada'`,
+      [id]
+    );
+    const totalComiteRes = await client.query(
+      `SELECT COUNT(*) as total FROM dirigente WHERE comite = 'Puntos'`
+    );
+
+    const aprobaciones = parseInt(votosRes.rows[0].aprobaciones);
+    const totalComite = parseInt(totalComiteRes.rows[0].total);
+
+    if (aprobaciones >= totalComite) {
+      // Todos aprobaron → aplicar la sugerencia
+      const sugRes = await client.query(
+        `UPDATE sugerencias_puntos 
+         SET estado = 'Aprobada', actualizado_en = CURRENT_TIMESTAMP
+         WHERE id = $1 RETURNING *`,
+        [id]
+      );
+      const sugerencia = sugRes.rows[0];
+
+      if (sugerencia.tipo_accion === 'sumar' && sugerencia.puntos) {
+        const tribusRes = await client.query(
+          `SELECT id_tribu FROM sugerencia_tribus WHERE id_sugerencia = $1`, [id]
+        );
+        for (const t of tribusRes.rows) {
+          await client.query(
+            `UPDATE tribu SET puntos = puntos + $1 WHERE id_tribu = $2`,
+            [sugerencia.puntos, t.id_tribu]
+          );
+        }
+      }
+
+      await client.query('COMMIT');
+      return res.json({ message: 'Sugerencia aprobada por unanimidad.', resultado: 'Aprobada' });
     }
 
     await client.query('COMMIT');
-    res.json({ message: `Sugerencia ${estado.toLowerCase()} con éxito` });
+    res.json({ 
+      message: `Voto registrado. ${aprobaciones}/${totalComite} aprobaciones.`,
+      resultado: 'Pendiente',
+      aprobaciones,
+      totalComite
+    });
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('Error actualizando sugerencia:', err);
+    console.error('Error registrando voto:', err);
     res.status(500).json({ error: 'Error del servidor' });
   } finally {
     client.release();
   }
 });
+
 
 /* Railway */
 app.listen(PORT, '0.0.0.0', () => {
