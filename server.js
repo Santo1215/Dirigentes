@@ -2040,7 +2040,13 @@ app.get('/sugerencias-puntos/pendientes', async (req, res) => {
                 SELECT string_agg(st.id_tribu::text, ',') 
                 FROM sugerencia_tribus st 
                 WHERE st.id_sugerencia = sp.id
-             ) as id_tribu
+             ) as id_tribu,
+             (
+                SELECT string_agg(t.nombre, ', ') 
+                FROM sugerencia_tribus st 
+                JOIN tribu t ON t.id_tribu = st.id_tribu
+                WHERE st.id_sugerencia = sp.id
+             ) as tribus_nombres
       FROM sugerencias_puntos sp
       JOIN dirigente d ON d.id_dirigente = sp.id_dirigente
       WHERE sp.estado = 'Pendiente'
