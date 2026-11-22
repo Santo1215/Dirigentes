@@ -97,6 +97,25 @@ app.use(
   }
 })();
 
+/* Auto-crear tabla comite si no existe */
+(async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS comite (
+        id_comite SERIAL PRIMARY KEY,
+        nombre TEXT UNIQUE NOT NULL
+      );
+    `);
+    const defaultComites = ['Asistencia', 'Religioso', 'Puntos', 'Integración', 'Redes', 'Económico'];
+    for (const c of defaultComites) {
+      await pool.query(`INSERT INTO comite (nombre) VALUES ($1) ON CONFLICT (nombre) DO NOTHING`, [c]);
+    }
+    console.log('Tabla comite lista');
+  } catch (err) {
+    console.error('Error creando tabla comite:', err.message);
+  }
+})();
+
 function generarContrasena(longitud = 9) {
   const mayus = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   const minus = 'abcdefghijklmnopqrstuvwxyz';
@@ -2179,6 +2198,246 @@ app.post('/sugerencias-puntos/:id/votar', async (req, res) => {
   }
 });
 
+
+/* ═══════════════════════════════════════════════════════════════
+   GESTIÓN DE TRIBUS (solo Coordinación)
+═══════════════════════════════════════════════════════════════ */
+
+/* GET /comites — Devuelve la lista de comités únicos */
+app.get('/comites', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT DISTINCT nombre AS comite FROM comite
+       UNION
+       SELECT DISTINCT comite FROM dirigente WHERE comite IS NOT NULL AND comite <> ''
+       ORDER BY comite ASC`
+    );
+    res.json(result.rows.map(r => r.comite));
+  } catch (err) {
+    console.error('Error obteniendo comités:', err);
+    res.status(500).json({ error: 'Error al obtener comités' });
+  }
+});
+
+/* POST /tribu — Crear nueva tribu */
+app.post('/tribu', auth, async (req, res) => {
+  const { nombre, color_hex, drive } = req.body;
+  if (!nombre || !nombre.trim()) {
+    return res.status(400).json({ error: 'El nombre de la tribu es obligatorio' });
+  }
+  try {
+    const result = await pool.query(
+      `INSERT INTO tribu (nombre, puntos, color_hex, drive) VALUES ($1, 0, $2, $3) RETURNING *`,
+      [nombre.trim(), color_hex || '#FF8C42', drive || null]
+    );
+    res.status(201).json({ mensaje: 'Tribu creada', tribu: result.rows[0] });
+  } catch (err) {
+    console.error('Error creando tribu:', err);
+    res.status(500).json({ error: 'Error al crear tribu' });
+  }
+});
+
+/* PUT /tribu/:id — Actualizar tribu */
+app.put('/tribu/:id', auth, async (req, res) => {
+  const { id } = req.params;
+  const { nombre, color_hex, drive } = req.body;
+  if (!nombre || !nombre.trim()) {
+    return res.status(400).json({ error: 'El nombre de la tribu es obligatorio' });
+  }
+  try {
+    const result = await pool.query(
+      `UPDATE tribu SET nombre = $1, color_hex = $2, drive = $3 WHERE id_tribu = $4 RETURNING *`,
+      [nombre.trim(), color_hex || '#FF8C42', drive || null, id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Tribu no encontrada' });
+    res.json({ mensaje: 'Tribu actualizada', tribu: result.rows[0] });
+  } catch (err) {
+    console.error('Error actualizando tribu:', err);
+    res.status(500).json({ error: 'Error al actualizar tribu' });
+  }
+});
+
+/* DELETE /tribu/:id — Eliminar tribu */
+app.delete('/tribu/:id', auth, async (req, res) => {
+  const { id } = req.params;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`UPDATE dirigente SET id_tribu = NULL WHERE id_tribu = $1`, [id]);
+    await client.query(`UPDATE dirigente SET id_tribu_secundaria = NULL WHERE id_tribu_secundaria = $1`, [id]);
+    await client.query(`DELETE FROM asistencia_exodito WHERE id_exodito IN (SELECT id_exodito FROM exodito WHERE id_tribu = $1)`, [id]);
+    await client.query(`DELETE FROM exodito WHERE id_tribu = $1`, [id]);
+    await client.query(`DELETE FROM sugerencia_tribus WHERE id_tribu = $1`, [id]);
+    const result = await client.query(`DELETE FROM tribu WHERE id_tribu = $1 RETURNING *`, [id]);
+    await client.query('COMMIT');
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Tribu no encontrada' });
+    res.json({ mensaje: 'Tribu eliminada', tribu: result.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error eliminando tribu:', err);
+    res.status(500).json({ error: 'Error al eliminar tribu' });
+  } finally {
+    client.release();
+  }
+});
+
+/* POST /comite — Crear nuevo comité */
+app.post('/comite', auth, async (req, res) => {
+  const { nombre } = req.body;
+  if (!nombre || !nombre.trim()) {
+    return res.status(400).json({ error: 'El nombre del comité es obligatorio' });
+  }
+  try {
+    await pool.query(
+      `INSERT INTO comite (nombre) VALUES ($1) ON CONFLICT (nombre) DO NOTHING`,
+      [nombre.trim()]
+    );
+    res.status(201).json({ mensaje: 'Comité creado', comite: nombre.trim() });
+  } catch (err) {
+    console.error('Error creando comité:', err);
+    res.status(500).json({ error: 'Error al crear comité' });
+  }
+});
+
+/* DELETE /comite — Eliminar comité (lo elimina y pone NULL en dirigentes que lo tenían) */
+app.delete('/comite', auth, async (req, res) => {
+  const { nombre } = req.body;
+  if (!nombre) return res.status(400).json({ error: 'Se requiere el nombre del comité' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`DELETE FROM comite WHERE LOWER(nombre) = LOWER($1)`, [nombre.trim()]);
+    const result = await client.query(
+      `UPDATE dirigente SET comite = NULL WHERE LOWER(comite) = LOWER($1) RETURNING id_dirigente`,
+      [nombre.trim()]
+    );
+    await client.query('COMMIT');
+    res.json({ mensaje: 'Comité eliminado', afectados: result.rowCount });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error eliminando comité:', err);
+    res.status(500).json({ error: 'Error al eliminar comité' });
+  } finally {
+    client.release();
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   ASISTENCIA DE DIRIGENTE INDIVIDUAL
+═══════════════════════════════════════════════════════════════ */
+
+/* GET /asistencia/dirigente/:id/buscar — Estadísticas de asistencia de un dirigente */
+app.get('/asistencia/dirigente/:id/buscar', auth, async (req, res) => {
+  const { id } = req.params;
+  const { desde, hasta } = req.query;
+
+  try {
+    const dirigenteResult = await pool.query(
+      `SELECT id_dirigente, nombre, apellido, rol, comite FROM dirigente WHERE id_dirigente = $1`,
+      [id]
+    );
+
+    if (dirigenteResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Dirigente no encontrado' });
+    }
+
+    const dirigente = dirigenteResult.rows[0];
+
+    const totalFechasResult = await pool.query(
+      `SELECT COUNT(DISTINCT fecha) AS total FROM asistencia`
+    );
+    const totalFechas = parseInt(totalFechasResult.rows[0]?.total || 0);
+
+    const asistenciasResult = await pool.query(
+      `SELECT DISTINCT fecha, estado, hora_llegada FROM asistencia WHERE id_dirigente = $1 AND estado IN ('Presente', 'Tarde') ORDER BY fecha`,
+      [id]
+    );
+    const totalAsistencias = asistenciasResult.rows.length;
+    const porcentajeGlobal = totalFechas > 0 ? Math.round((totalAsistencias / totalFechas) * 100) : 0;
+
+    let rangoPresentes = 0;
+    let rangoPosibles = 0;
+    let porcentajeRango = 0;
+    let registrosRango = [];
+
+    if (desde && hasta) {
+      const rangoFechasResult = await pool.query(
+        `SELECT COUNT(DISTINCT fecha) AS total FROM asistencia WHERE fecha BETWEEN $1 AND $2`,
+        [desde, hasta]
+      );
+      rangoPosibles = parseInt(rangoFechasResult.rows[0]?.total || 0);
+
+      const rangoPresentesResult = await pool.query(
+        `SELECT fecha, estado, hora_llegada FROM asistencia WHERE id_dirigente = $1 AND fecha BETWEEN $2 AND $3 AND estado IN ('Presente', 'Tarde') ORDER BY fecha`,
+        [id, desde, hasta]
+      );
+      rangoPresentes = rangoPresentesResult.rows.length;
+      porcentajeRango = rangoPosibles > 0 ? Math.round((rangoPresentes / rangoPosibles) * 100) : 0;
+      registrosRango = rangoPresentesResult.rows;
+    }
+
+    res.json({
+      dirigente,
+      total_asistencias: totalAsistencias,
+      total_posibles: totalFechas,
+      porcentaje_global: porcentajeGlobal,
+      porcentaje_rango: porcentajeRango,
+      rango_presentes: rangoPresentes,
+      rango_posibles: rangoPosibles,
+      registros_rango: registrosRango,
+      desde: desde || null,
+      hasta: hasta || null,
+    });
+  } catch (err) {
+    console.error('Error en buscar dirigente:', err);
+    res.status(500).json({ error: 'Error al buscar asistencia del dirigente' });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   LIMPIEZA MASIVA DE DATOS (solo Coordinación / ADMIN)
+═══════════════════════════════════════════════════════════════ */
+
+/* DELETE /admin/limpiar-datos — Elimina todos los datos operativos */
+app.delete('/admin/limpiar-datos', auth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const r1 = await client.query(`DELETE FROM actividades`);
+    const r2 = await client.query(`DELETE FROM calificacion_asamblea`);
+    const r3 = await client.query(`DELETE FROM asamblea`);
+    const r4 = await client.query(`DELETE FROM asistencia_exodito`);
+    const r5 = await client.query(`DELETE FROM asistencia`);
+    const r6 = await client.query(`DELETE FROM asistencia_exodito_sinai`);
+    const r7 = await client.query(`DELETE FROM sugerencia_votos`);
+    const r8 = await client.query(`DELETE FROM sugerencia_tribus`);
+    const r9 = await client.query(`DELETE FROM sugerencias_puntos`);
+
+    await client.query('COMMIT');
+
+    res.json({
+      mensaje: 'Datos eliminados correctamente',
+      eliminados: {
+        actividades: r1.rowCount,
+        calificaciones_asambleas: r2.rowCount,
+        asambleas: r3.rowCount,
+        asistencia_exoditos: r4.rowCount,
+        asistencia_dirigentes: r5.rowCount,
+        asistencia_sinai: r6.rowCount,
+        sugerencia_votos: r7.rowCount,
+        sugerencia_tribus: r8.rowCount,
+        sugerencias_puntos: r9.rowCount,
+      }
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error en limpiar-datos:', err);
+    res.status(500).json({ error: 'Error al limpiar datos' });
+  } finally {
+    client.release();
+  }
+});
 
 /* Railway */
 app.listen(PORT, '0.0.0.0', () => {
