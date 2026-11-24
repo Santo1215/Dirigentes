@@ -1470,6 +1470,16 @@ app.put('/actividades/:id', auth, async (req, res) => {
       return res.status(403).json({ error: 'No tienes permisos para editar esta actividad' });
     }
 
+    if (!esCoord && tipo) {
+      const tipoNorm = tipo.trim().toLowerCase();
+      const comiteNorm = (autor.comite || '').trim().toLowerCase();
+      if (tipoNorm !== comiteNorm && tipoNorm !== 'otro') {
+        return res.status(403).json({
+          error: `Solo puedes asignar actividades a tu comité (${autor.comite}) o de tipo "Otro"`
+        });
+      }
+    }
+
     const result = await pool.query(
       `UPDATE actividades
        SET verificar_asistencia = COALESCE($1, verificar_asistencia),
@@ -1571,6 +1581,17 @@ app.post('/actividades', auth, async (req, res) => {
 
     if (!esCoord && (!autor || !autor.puede_crear_actividades)) {
       return res.status(403).json({ error: 'Tu comité no tiene permisos para crear actividades' });
+    }
+
+    // Los miembros de comités solo pueden crear actividades para su propio comité o de tipo "Otro"
+    if (!esCoord) {
+      const tipoNorm = (tipo || 'Otro').trim().toLowerCase();
+      const comiteNorm = (autor.comite || '').trim().toLowerCase();
+      if (tipoNorm !== comiteNorm && tipoNorm !== 'otro') {
+        return res.status(403).json({
+          error: `Solo puedes crear actividades para tu comité (${autor.comite}) o de tipo "Otro"`
+        });
+      }
     }
 
     const result = await pool.query(
@@ -2402,11 +2423,18 @@ app.get('/comites/mis-permisos', auth, async (req, res) => {
     const d = result.rows[0];
     const esCoord = d.rol === 'Coordinación' || d.rol === 'ADMIN';
 
+    // Obtener todos los comités que tienen permiso para crear actividades
+    const comitesPermitidosRes = await pool.query(
+      `SELECT nombre FROM comite WHERE puede_crear_actividades = true ORDER BY nombre ASC`
+    );
+    const comitesConPermiso = comitesPermitidosRes.rows.map(r => r.nombre);
+
     res.json({
       esCoordinacion: esCoord,
       comite: d.comite || null,
       puede_crear_actividades: esCoord || Boolean(d.puede_crear_actividades),
-      puede_poner_multas: esCoord || Boolean(d.puede_poner_multas)
+      puede_poner_multas: esCoord || Boolean(d.puede_poner_multas),
+      comites_con_permiso_actividades: comitesConPermiso
     });
   } catch (err) {
     console.error('Error consultando mis permisos:', err);
