@@ -97,22 +97,54 @@ app.use(
   }
 })();
 
-/* Auto-crear tabla comite si no existe */
+/* Auto-crear y migrar tabla comite si no existe */
 (async () => {
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS comite (
         id_comite SERIAL PRIMARY KEY,
-        nombre TEXT UNIQUE NOT NULL
+        nombre TEXT UNIQUE NOT NULL,
+        puede_crear_actividades BOOLEAN NOT NULL DEFAULT false,
+        puede_poner_multas BOOLEAN NOT NULL DEFAULT false
       );
     `);
-    const defaultComites = ['Asistencia', 'Religioso', 'Puntos', 'Integración', 'Redes', 'Económico'];
+    await pool.query(`
+      ALTER TABLE comite
+      ADD COLUMN IF NOT EXISTS puede_crear_actividades BOOLEAN NOT NULL DEFAULT false;
+    `);
+    await pool.query(`
+      ALTER TABLE comite
+      ADD COLUMN IF NOT EXISTS puede_poner_multas BOOLEAN NOT NULL DEFAULT false;
+    `);
+
+    const defaultComites = [
+      { nombre: 'Asistencia', puede_crear_actividades: false, puede_poner_multas: false },
+      { nombre: 'Religioso', puede_crear_actividades: true, puede_poner_multas: false },
+      { nombre: 'Puntos', puede_crear_actividades: false, puede_poner_multas: false },
+      { nombre: 'Integración', puede_crear_actividades: true, puede_poner_multas: true },
+      { nombre: 'Redes', puede_crear_actividades: true, puede_poner_multas: false },
+      { nombre: 'Económico', puede_crear_actividades: false, puede_poner_multas: true },
+    ];
     for (const c of defaultComites) {
-      await pool.query(`INSERT INTO comite (nombre) VALUES ($1) ON CONFLICT (nombre) DO NOTHING`, [c]);
+      await pool.query(
+        `INSERT INTO comite (nombre, puede_crear_actividades, puede_poner_multas)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (nombre) DO UPDATE
+         SET puede_crear_actividades = COALESCE(comite.puede_crear_actividades, EXCLUDED.puede_crear_actividades),
+             puede_poner_multas = COALESCE(comite.puede_poner_multas, EXCLUDED.puede_poner_multas)`,
+        [c.nombre, c.puede_crear_actividades, c.puede_poner_multas]
+      );
     }
-    console.log('Tabla comite lista');
+    await pool.query(`
+      INSERT INTO comite (nombre, puede_crear_actividades, puede_poner_multas)
+      SELECT DISTINCT comite, false, false
+      FROM dirigente
+      WHERE comite IS NOT NULL AND comite <> ''
+      ON CONFLICT (nombre) DO NOTHING;
+    `);
+    console.log('Tabla comite y columnas de permisos listas');
   } catch (err) {
-    console.error('Error creando tabla comite:', err.message);
+    console.error('Error creando/migrando tabla comite:', err.message);
   }
 })();
 
@@ -768,6 +800,21 @@ app.post('/multas', auth, async (req, res) => {
   }
 
   try {
+    const idAutor = req.user.id_dirigente;
+    const checkRes = await pool.query(
+      `SELECT d.rol, d.comite, COALESCE(c.puede_poner_multas, false) AS puede_poner_multas
+       FROM dirigente d
+       LEFT JOIN comite c ON LOWER(c.nombre) = LOWER(d.comite)
+       WHERE d.id_dirigente = $1`,
+      [idAutor]
+    );
+    const autor = checkRes.rows[0];
+    const puedePoner = autor && (autor.rol === 'Coordinación' || autor.rol === 'ADMIN' || autor.puede_poner_multas);
+
+    if (!puedePoner) {
+      return res.status(403).json({ error: 'Tu comité no tiene permisos para asignar multas' });
+    }
+
     const result = await pool.query(
       `INSERT INTO multa (id_dirigente, detalle, monto, motivo)
        VALUES ($1, $2, $3, $4)
@@ -788,6 +835,21 @@ app.post('/multas', auth, async (req, res) => {
 app.delete('/multa/:id', auth, async (req, res) => {
   const { id } = req.params;
   try {
+    const idAutor = req.user.id_dirigente;
+    const checkRes = await pool.query(
+      `SELECT d.rol, d.comite, COALESCE(c.puede_poner_multas, false) AS puede_poner_multas
+       FROM dirigente d
+       LEFT JOIN comite c ON LOWER(c.nombre) = LOWER(d.comite)
+       WHERE d.id_dirigente = $1`,
+      [idAutor]
+    );
+    const autor = checkRes.rows[0];
+    const puedeEliminar = autor && (autor.rol === 'Coordinación' || autor.rol === 'ADMIN' || autor.puede_poner_multas);
+
+    if (!puedeEliminar) {
+      return res.status(403).json({ error: 'No tienes permisos para eliminar multas' });
+    }
+
     const result = await pool.query(
       `DELETE FROM multa WHERE id_multa = $1 RETURNING *`,
       [id]
@@ -1379,11 +1441,35 @@ app.get('/asistencia/reporte-tribus', auth, async (req, res) => {
   }
 });
 
-app.put('/actividades/:id', async (req, res) => {
+app.put('/actividades/:id', auth, async (req, res) => {
   const { id } = req.params;
   const { verificar_asistencia, titulo, descripcion, fecha, responsable, tipo } = req.body;
 
   try {
+    const idAutor = req.user.id_dirigente;
+    const dirRes = await pool.query(
+      `SELECT d.rol, d.comite, d.nombre, d.apellido, COALESCE(c.puede_crear_actividades, false) AS puede_crear_actividades
+       FROM dirigente d
+       LEFT JOIN comite c ON LOWER(c.nombre) = LOWER(d.comite)
+       WHERE d.id_dirigente = $1`,
+      [idAutor]
+    );
+    const autor = dirRes.rows[0];
+    const esCoord = autor && (autor.rol === 'Coordinación' || autor.rol === 'ADMIN');
+
+    const actActualRes = await pool.query('SELECT * FROM actividades WHERE id_actividad = $1', [id]);
+    if (actActualRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Actividad no encontrada' });
+    }
+    const actActual = actActualRes.rows[0];
+    const nombreCompleto = autor ? `${autor.nombre} ${autor.apellido}`.toLowerCase() : '';
+    const esResp = actActual.responsable && actActual.responsable.toLowerCase() === nombreCompleto;
+    const esMismoComite = autor && autor.comite && actActual.tipo && autor.comite.toLowerCase() === actActual.tipo.toLowerCase();
+
+    if (!esCoord && !esResp && !(autor?.puede_crear_actividades && esMismoComite)) {
+      return res.status(403).json({ error: 'No tienes permisos para editar esta actividad' });
+    }
+
     const result = await pool.query(
       `UPDATE actividades
        SET verificar_asistencia = COALESCE($1, verificar_asistencia),
@@ -1405,10 +1491,6 @@ app.put('/actividades/:id', async (req, res) => {
       ]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Actividad no encontrada' });
-    }
-
     res.json({
       mensaje: 'Actividad actualizada correctamente',
       actividad: result.rows[0]
@@ -1419,17 +1501,38 @@ app.put('/actividades/:id', async (req, res) => {
   }
 });
 
-app.delete('/actividades/:id', async (req, res) => {
+app.delete('/actividades/:id', auth, async (req, res) => {
   const { id } = req.params;
   try {
+    const idAutor = req.user.id_dirigente;
+    const dirRes = await pool.query(
+      `SELECT d.rol, d.comite, d.nombre, d.apellido, COALESCE(c.puede_crear_actividades, false) AS puede_crear_actividades
+       FROM dirigente d
+       LEFT JOIN comite c ON LOWER(c.nombre) = LOWER(d.comite)
+       WHERE d.id_dirigente = $1`,
+      [idAutor]
+    );
+    const autor = dirRes.rows[0];
+    const esCoord = autor && (autor.rol === 'Coordinación' || autor.rol === 'ADMIN');
+
+    const actActualRes = await pool.query('SELECT * FROM actividades WHERE id_actividad = $1', [id]);
+    if (actActualRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Actividad no encontrada' });
+    }
+    const actActual = actActualRes.rows[0];
+    const nombreCompleto = autor ? `${autor.nombre} ${autor.apellido}`.toLowerCase() : '';
+    const esResp = actActual.responsable && actActual.responsable.toLowerCase() === nombreCompleto;
+    const esMismoComite = autor && autor.comite && actActual.tipo && autor.comite.toLowerCase() === actActual.tipo.toLowerCase();
+
+    if (!esCoord && !esResp && !(autor?.puede_crear_actividades && esMismoComite)) {
+      return res.status(403).json({ error: 'No tienes permisos para eliminar esta actividad' });
+    }
+
     await pool.query('DELETE FROM asistencia_actividad WHERE id_actividad = $1', [id]);
     const result = await pool.query(
       `DELETE FROM actividades WHERE id_actividad = $1 RETURNING *`,
       [id]
     );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Actividad no encontrada' });
-    }
     res.json({ mensaje: 'Actividad eliminada', actividad: result.rows[0] });
   } catch (err) {
     console.error(err);
@@ -1447,7 +1550,7 @@ app.get('/actividades', async (req, res) => {
   }
 });
 
-app.post('/actividades', async (req, res) => {
+app.post('/actividades', auth, async (req, res) => {
   const { titulo, descripcion, fecha, responsable, tipo, verificar_asistencia } = req.body;
 
   if (!titulo || !fecha) {
@@ -1455,6 +1558,21 @@ app.post('/actividades', async (req, res) => {
   }
 
   try {
+    const idAutor = req.user.id_dirigente;
+    const dirRes = await pool.query(
+      `SELECT d.rol, d.comite, COALESCE(c.puede_crear_actividades, false) AS puede_crear_actividades
+       FROM dirigente d
+       LEFT JOIN comite c ON LOWER(c.nombre) = LOWER(d.comite)
+       WHERE d.id_dirigente = $1`,
+      [idAutor]
+    );
+    const autor = dirRes.rows[0];
+    const esCoord = autor && (autor.rol === 'Coordinación' || autor.rol === 'ADMIN');
+
+    if (!esCoord && (!autor || !autor.puede_crear_actividades)) {
+      return res.status(403).json({ error: 'Tu comité no tiene permisos para crear actividades' });
+    }
+
     const result = await pool.query(
       `INSERT INTO actividades (titulo, descripcion, fecha, responsable, tipo, verificar_asistencia)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -2200,10 +2318,10 @@ app.post('/sugerencias-puntos/:id/votar', async (req, res) => {
 
 
 /* ═══════════════════════════════════════════════════════════════
-   GESTIÓN DE TRIBUS (solo Coordinación)
+   GESTIÓN DE COMITÉS Y TRIBUS (solo Coordinación / ADMIN)
 ═══════════════════════════════════════════════════════════════ */
 
-/* GET /comites — Devuelve la lista de comités únicos */
+/* GET /comites — Devuelve la lista de comités únicos (nombres para selectores) */
 app.get('/comites', auth, async (req, res) => {
   try {
     const result = await pool.query(
@@ -2216,6 +2334,130 @@ app.get('/comites', auth, async (req, res) => {
   } catch (err) {
     console.error('Error obteniendo comités:', err);
     res.status(500).json({ error: 'Error al obtener comités' });
+  }
+});
+
+/* GET /comites/gestion — Devuelve los comités con sus integrantes y permisos delegados */
+app.get('/comites/gestion', auth, async (req, res) => {
+  try {
+    // Asegurar que comités existentes en dirigentes estén registrados en la tabla comite
+    await pool.query(`
+      INSERT INTO comite (nombre, puede_crear_actividades, puede_poner_multas)
+      SELECT DISTINCT comite, false, false
+      FROM dirigente
+      WHERE comite IS NOT NULL AND comite <> ''
+      ON CONFLICT (nombre) DO NOTHING;
+    `);
+
+    const comitesRes = await pool.query(`
+      SELECT id_comite, nombre,
+             COALESCE(puede_crear_actividades, false) AS puede_crear_actividades,
+             COALESCE(puede_poner_multas, false) AS puede_poner_multas
+      FROM comite
+      ORDER BY nombre ASC
+    `);
+
+    const dirigentesRes = await pool.query(`
+      SELECT id_dirigente, nombre, apellido, rol, comite, foto
+      FROM dirigente
+      WHERE comite IS NOT NULL AND comite <> ''
+      ORDER BY nombre ASC, apellido ASC
+    `);
+
+    const comites = comitesRes.rows.map(c => {
+      const integrantes = dirigentesRes.rows.filter(
+        d => d.comite && d.comite.trim().toLowerCase() === c.nombre.trim().toLowerCase()
+      );
+      return {
+        ...c,
+        integrantes
+      };
+    });
+
+    res.json(comites);
+  } catch (err) {
+    console.error('Error obteniendo comités para gestión:', err);
+    res.status(500).json({ error: 'Error al obtener comités para gestión' });
+  }
+});
+
+/* GET /comites/mis-permisos — Devuelve permisos del comité del usuario logueado */
+app.get('/comites/mis-permisos', auth, async (req, res) => {
+  try {
+    const idAutor = req.user.id_dirigente;
+    const result = await pool.query(
+      `SELECT d.id_dirigente, d.rol, d.comite,
+              COALESCE(c.puede_crear_actividades, false) AS puede_crear_actividades,
+              COALESCE(c.puede_poner_multas, false) AS puede_poner_multas
+       FROM dirigente d
+       LEFT JOIN comite c ON LOWER(c.nombre) = LOWER(d.comite)
+       WHERE d.id_dirigente = $1`,
+      [idAutor]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Dirigente no encontrado' });
+    }
+
+    const d = result.rows[0];
+    const esCoord = d.rol === 'Coordinación' || d.rol === 'ADMIN';
+
+    res.json({
+      esCoordinacion: esCoord,
+      comite: d.comite || null,
+      puede_crear_actividades: esCoord || Boolean(d.puede_crear_actividades),
+      puede_poner_multas: esCoord || Boolean(d.puede_poner_multas)
+    });
+  } catch (err) {
+    console.error('Error consultando mis permisos:', err);
+    res.status(500).json({ error: 'Error al consultar permisos de comité' });
+  }
+});
+
+/* PUT /comite/permisos — Coordinación delega o revoca permisos a un comité */
+app.put('/comite/permisos', auth, async (req, res) => {
+  if (req.user.rol !== 'Coordinación' && req.user.rol !== 'ADMIN') {
+    return res.status(403).json({ error: 'Solo Coordinación puede delegar permisos a comités' });
+  }
+
+  const { nombre, puede_crear_actividades, puede_poner_multas } = req.body;
+  if (!nombre || !nombre.trim()) {
+    return res.status(400).json({ error: 'El nombre del comité es obligatorio' });
+  }
+
+  try {
+    // Si no existiera en la tabla comite, insertarlo primero
+    await pool.query(
+      `INSERT INTO comite (nombre, puede_crear_actividades, puede_poner_multas)
+       VALUES ($1, false, false)
+       ON CONFLICT (nombre) DO NOTHING`,
+      [nombre.trim()]
+    );
+
+    const result = await pool.query(
+      `UPDATE comite
+       SET puede_crear_actividades = COALESCE($1, puede_crear_actividades),
+           puede_poner_multas = COALESCE($2, puede_poner_multas)
+       WHERE LOWER(nombre) = LOWER($3)
+       RETURNING *`,
+      [
+        puede_crear_actividades === undefined ? null : Boolean(puede_crear_actividades),
+        puede_poner_multas === undefined ? null : Boolean(puede_poner_multas),
+        nombre.trim()
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Comité no encontrado' });
+    }
+
+    res.json({
+      mensaje: 'Permisos actualizados correctamente',
+      comite: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Error actualizando permisos del comité:', err);
+    res.status(500).json({ error: 'Error al actualizar permisos del comité' });
   }
 });
 
@@ -2283,16 +2525,21 @@ app.delete('/tribu/:id', auth, async (req, res) => {
 
 /* POST /comite — Crear nuevo comité */
 app.post('/comite', auth, async (req, res) => {
-  const { nombre } = req.body;
+  const { nombre, puede_crear_actividades, puede_poner_multas } = req.body;
   if (!nombre || !nombre.trim()) {
     return res.status(400).json({ error: 'El nombre del comité es obligatorio' });
   }
   try {
-    await pool.query(
-      `INSERT INTO comite (nombre) VALUES ($1) ON CONFLICT (nombre) DO NOTHING`,
-      [nombre.trim()]
+    const result = await pool.query(
+      `INSERT INTO comite (nombre, puede_crear_actividades, puede_poner_multas)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (nombre) DO UPDATE
+       SET puede_crear_actividades = EXCLUDED.puede_crear_actividades,
+           puede_poner_multas = EXCLUDED.puede_poner_multas
+       RETURNING *`,
+      [nombre.trim(), Boolean(puede_crear_actividades), Boolean(puede_poner_multas)]
     );
-    res.status(201).json({ mensaje: 'Comité creado', comite: nombre.trim() });
+    res.status(201).json({ mensaje: 'Comité creado', comite: result.rows[0] });
   } catch (err) {
     console.error('Error creando comité:', err);
     res.status(500).json({ error: 'Error al crear comité' });
