@@ -1,5 +1,7 @@
-const { Pool } = require('pg');
-const pool = new Pool({
+import pg from 'pg';
+const { Pool } = pg;
+
+export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
     rejectUnauthorized: false,
@@ -7,7 +9,7 @@ const pool = new Pool({
 });
 
 pool.on('connect', () => {
-  console.log('✅ Conectado a Neon');
+  console.log('✅ Conectado a base de datos');
 });
 
-module.exports = pool;
+export default pool;
